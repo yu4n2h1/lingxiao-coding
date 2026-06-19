@@ -34,6 +34,27 @@
 
 你给目标，Leader 负责判断、拆解、规划、建 DAG、组专家团、派发任务；Worker 专家并行执行研究、前端、后端、测试、审查、文档、Git 操作等工作；WebUI/TUI 实时同步完整运行态，所有任务、工具、权限、证据和会话状态都进入同一个工程内核。
 
+### 界面一览
+
+<table>
+  <tr>
+    <td width="50%" align="center"><b>WebUI 任务面板</b></td>
+    <td width="50%" align="center"><b>WebUI 专家面板</b></td>
+  </tr>
+  <tr>
+    <td><img src="./docs/images/tasks.png" alt="任务面板" /></td>
+    <td><img src="./docs/images/agents.png" alt="专家面板" /></td>
+  </tr>
+  <tr>
+    <td align="center"><b>TUI 终端界面</b></td>
+    <td align="center"><b>WebUI 对话与黑板</b></td>
+  </tr>
+  <tr>
+    <td><img src="./docs/images/TUI.png" alt="TUI 终端界面" /></td>
+    <td><img src="./docs/images/chat.png" alt="对话界面" /></td>
+  </tr>
+</table>
+
 ### 安装
 
 #### 前置要求
@@ -60,6 +81,12 @@ lingxiao
 首次运行会引导你配置模型和 API Key。
 
 #### 升级
+
+```bash
+lingxiao upgrade
+```
+
+或手动执行：
 
 ```bash
 cd lingxiao-coding
@@ -149,6 +176,27 @@ LingXiao upgrades "chatting with a model" into "commanding an observable, recove
 
 You provide the goal. The Leader breaks it down, builds a DAG, assembles a specialist team, and dispatches tasks. Workers execute in parallel — research, frontend, backend, testing, review, documentation, Git operations. WebUI/TUI sync the full runtime state in real time.
 
+### Screenshots
+
+<table>
+  <tr>
+    <td width="50%" align="center"><b>WebUI Task Panel</b></td>
+    <td width="50%" align="center"><b>WebUI Agent Panel</b></td>
+  </tr>
+  <tr>
+    <td><img src="./docs/images/tasks.png" alt="Task panel" /></td>
+    <td><img src="./docs/images/agents.png" alt="Agent panel" /></td>
+  </tr>
+  <tr>
+    <td align="center"><b>TUI Terminal</b></td>
+    <td align="center"><b>WebUI Chat & Blackboard</b></td>
+  </tr>
+  <tr>
+    <td><img src="./docs/images/TUI.png" alt="TUI terminal" /></td>
+    <td><img src="./docs/images/chat.png" alt="Chat interface" /></td>
+  </tr>
+</table>
+
 ### Installation
 
 #### Prerequisites
@@ -173,6 +221,21 @@ lingxiao
 ```
 
 First launch guides you through model and API key setup.
+
+#### Upgrade
+
+```bash
+lingxiao upgrade
+```
+
+Or manually:
+
+```bash
+cd lingxiao-coding
+git pull
+npm install
+npm run build
+```
 
 ### Key Features
 
