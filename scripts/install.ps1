@@ -85,13 +85,26 @@ foreach ($name in $downloadCandidates) {
   $url = "https://github.com/$Repo/releases/download/$Version/$name"
   $dest = Join-Path $tempDir.FullName $name
   Write-Host "▸ 尝试下载: $name"
-  try {
-    Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing
-    $archivePath = $dest
-    Write-Host "  ✓ 下载完成" -ForegroundColor Green
-    break
-  } catch {
-    Write-Host "  ✗ 未找到，尝试下一个..." -ForegroundColor Yellow
+  # 优先用 curl.exe（Windows 10+ 自带，比 Invoke-WebRequest 快很多）
+  $curlExe = Get-Command curl.exe -ErrorAction SilentlyContinue
+  if ($curlExe) {
+    & curl.exe -fSL -o "$dest" "$url" 2>$null
+    if ($LASTEXITCODE -eq 0 -and (Test-Path $dest)) {
+      $archivePath = $dest
+      Write-Host "  ✓ 下载完成" -ForegroundColor Green
+      break
+    }
+  } else {
+    try {
+      # 回退到 .NET WebClient（比 Invoke-WebRequest 快，无 HTML 解析开销）
+      $wc = New-Object System.Net.WebClient
+      $wc.DownloadFile($url, $dest)
+      $archivePath = $dest
+      Write-Host "  ✓ 下载完成" -ForegroundColor Green
+      break
+    } catch {
+      Write-Host "  ✗ 未找到，尝试下一个..." -ForegroundColor Yellow
+    }
   }
 }
 
