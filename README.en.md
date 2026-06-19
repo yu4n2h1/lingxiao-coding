@@ -8,9 +8,13 @@
 
 Version: `1.0.0`
 
-![LingXiao WebUI Command Center](./docs/images/homepage.png)
+![LingXiao WebUI Chat](./docs/images/chat.png)
 
-<p align="center"><sub>LingXiao WebUI — Tasks · Blackboard · Terminal · Git · Agents · Memory · Plugins</sub></p>
+<p align="center"><sub>LingXiao WebUI Chat — thinking, tool calls, streaming output, full observability.</sub></p>
+
+![LingXiao TUI Terminal](./docs/images/TUI.png)
+
+<p align="center"><sub>LingXiao TUI — synced with WebUI in real time, full orchestration from the terminal.</sub></p>
 
 ---
 

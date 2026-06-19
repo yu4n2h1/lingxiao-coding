@@ -8,9 +8,13 @@
 
 当前版本：`1.0.0`
 
-![LingXiao WebUI 指挥中心](./docs/images/homepage.png)
+![LingXiao WebUI 对话](./docs/images/chat.png)
 
-<p align="center"><sub>凌霄 WebUI 主页：本地指挥中心，任务/黑板/终端/Git/记忆等入口一屏可见。</sub></p>
+<p align="center"><sub>凌霄 WebUI 对话面板：thinking、工具调用、流式输出，全链路可观测。</sub></p>
+
+![LingXiao TUI 终端界面](./docs/images/TUI.png)
+
+<p align="center"><sub>凌霄 TUI 终端界面：与 WebUI 实时同步，终端内完成全部编排操作。</sub></p>
 
 ---
 
