@@ -141,7 +141,7 @@ if ($archivePath -match '\.tar\.gz$') {
     Write-Host "  ℹ 检测到内层 tar.gz，二次解压..." -ForegroundColor Yellow
     $innerStaging = Join-Path $tempDir.FullName "inner_staging"
     New-Item -ItemType Directory -Force -Path $innerStaging | Out-Null
-    tar xzf "$innerTar.FullName" -C "$innerStaging"
+    tar xzf "$($innerTar.FullName)" -C "$innerStaging"
     $staging = $innerStaging
   }
 } else {
