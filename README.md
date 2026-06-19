@@ -26,10 +26,10 @@
 curl -fsSL https://raw.githubusercontent.com/hexian2001/lingxiao-coding/main/scripts/install.sh | sh
 ```
 
-### Windows PowerShell
+### Windows (CMD / PowerShell)
 
 ```powershell
-irm https://raw.githubusercontent.com/hexian2001/lingxiao-coding/main/scripts/install.ps1 | iex
+powershell -c "irm https://raw.githubusercontent.com/hexian2001/lingxiao-coding/main/scripts/install.ps1 | iex"
 ```
 
 > 无需 Node.js。脚本自动检测平台和架构，下载对应的便携二进制包到 `~/.lingxiao/bin`。

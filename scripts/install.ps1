@@ -4,8 +4,8 @@
 .DESCRIPTION
   自动检测平台 → 下载对应 release → 解压 → 添加到 PATH → 验证
 .EXAMPLE
-  # 一键安装（PowerShell）
-  irm https://raw.githubusercontent.com/hexian2001/lingxiao-coding/main/scripts/install.ps1 | iex
+  # 一键安装（CMD / PowerShell）
+  powershell -c "irm https://raw.githubusercontent.com/hexian2001/lingxiao-coding/main/scripts/install.ps1 | iex"
 .EXAMPLE
   # 指定版本和安装目录
   .\install.ps1 -Version "v1.0.0" -InstallDir "$env:LOCALAPPDATA\lingxiao"
@@ -136,7 +136,7 @@ Write-Host "║  路径: $InstallDir"
 Write-Host "║  命令: lingxiao (重新打开终端后生效)"
 Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "运行 \`lingxiao doctor\` 验证环境"
+Write-Host "运行 `lingxiao` 启动"
 Write-Host ""
 Write-Host "首次使用浏览器功能时会自动下载 Chromium（约 300MB）"
 

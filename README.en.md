@@ -26,10 +26,10 @@ Version: `1.0.0`
 curl -fsSL https://raw.githubusercontent.com/hexian2001/lingxiao-coding/main/scripts/install.sh | sh
 ```
 
-### Windows PowerShell
+### Windows (CMD / PowerShell)
 
 ```powershell
-irm https://raw.githubusercontent.com/hexian2001/lingxiao-coding/main/scripts/install.ps1 | iex
+powershell -c "irm https://raw.githubusercontent.com/hexian2001/lingxiao-coding/main/scripts/install.ps1 | iex"
 ```
 
 > No Node.js required. The script auto-detects platform and architecture, downloads the matching portable binary to `~/.lingxiao/bin`.
