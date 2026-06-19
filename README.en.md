@@ -30,11 +30,13 @@ irm https://raw.githubusercontent.com/hexian2001/lingxiao-coding/main/scripts/in
 
 > No Node.js required. The script auto-detects platform and architecture, downloads the matching portable binary to `~/.lingxiao/bin`.
 
-After installation:
+After installation, just run:
 
 ```bash
-lingxiao doctor     # Environment diagnostics
+lingxiao            # Start — first run guides you through model and API key setup
 ```
+
+Config file: `~/.lingxiao/settings.json`
 
 ---
 
@@ -57,7 +59,6 @@ lingxiao --session <id>  # Resume a session
 
 The terminal prints the WebUI URL. Port is written to `~/.lingxiao/port`.
 
-First-time setup: run `lingxiao init` to initialize config at `~/.lingxiao/settings.json`
 
 ---
 

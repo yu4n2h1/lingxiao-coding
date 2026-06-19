@@ -30,11 +30,13 @@ irm https://raw.githubusercontent.com/hexian2001/lingxiao-coding/main/scripts/in
 
 > 无需 Node.js。脚本自动检测平台和架构，下载对应的便携二进制包到 `~/.lingxiao/bin`。
 
-安装完成后：
+安装完成后直接运行：
 
 ```bash
-lingxiao doctor     # 环境诊断
+lingxiao            # 启动，首次运行会引导配置模型和 API 密钥
 ```
+
+配置文件：`~/.lingxiao/settings.json`
 
 ---
 
@@ -57,7 +59,6 @@ lingxiao --session <id>  # 恢复指定会话
 
 终端会打印 WebUI 地址，端口写入 `~/.lingxiao/port`。
 
-首次使用运行 `lingxiao init` 初始化配置，配置文件：`~/.lingxiao/settings.json`
 
 ---
 
