@@ -19,6 +19,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# ── TLS 兼容 ──────────────────────────────────────────────────────────────────
+# PS 5.1 默认 TLS 1.0，GitHub 要求 TLS 1.2+
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
+
 # ── 平台检测 ──────────────────────────────────────────────────────────────────
 $arch = if ([Environment]::Is64BitOperatingSystem) { "x64" } else { "x86" }
 if ($arch -ne "x64") {
