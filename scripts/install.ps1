@@ -53,12 +53,14 @@ Write-Host "★ 版本: $Version" -ForegroundColor Cyan
 $versionNoV = $Version -replace '^v', ''
 
 # ── 下载 ──────────────────────────────────────────────────────────────────────
-# 尝试多种文件名：无版本号 → 带v前缀 → 不带v前缀
-# tar.gz 全平台兼容，解压比 zip 快 3-5x
+# 尝试多种文件名 + 两种归档格式（tar.gz 优先，zip 兼容旧 release）
 $downloadCandidates = @(
   "lingxiao-$target.tar.gz"
   "lingxiao-$Version-$target.tar.gz"
   "lingxiao-$versionNoV-$target.tar.gz"
+  "lingxiao-$target.zip"
+  "lingxiao-$Version-$target.zip"
+  "lingxiao-$versionNoV-$target.zip"
 )
 
 $tempDir = New-Item -ItemType Directory -Force -Path "$env:TEMP\lingxiao-install-$(Get-Random)"
@@ -92,10 +94,32 @@ if (Test-Path $InstallDir) {
   Move-Item $InstallDir $backup
 }
 
-# Windows 10 1803+ 内置 tar，比 Expand-Archive 快很多
+# 自适应解压：tar.gz 直接解，zip 先解外层再看有没有内层 tar.gz
 $staging = Join-Path $tempDir.FullName "staging"
 New-Item -ItemType Directory -Force -Path $staging | Out-Null
-tar xzf "$archivePath" -C "$staging"
+
+if ($archivePath -match '\.tar\.gz$') {
+  tar xzf "$archivePath" -C "$staging"
+} elseif ($archivePath -match '\.zip$') {
+  # 先尝试用内置 tar 解 zip（Windows 10 1803+ 支持），回退到 Expand-Archive
+  try {
+    tar xf "$archivePath" -C "$staging" 2>$null
+  } catch {
+    Expand-Archive -Path "$archivePath" -DestinationPath $staging -Force
+  }
+  # 检查是否有内层 tar.gz
+  $innerTar = Get-ChildItem -Path $staging -Filter "*.tar.gz" -Recurse | Select-Object -First 1
+  if ($innerTar) {
+    Write-Host "  ℹ 检测到内层 tar.gz，二次解压..." -ForegroundColor Yellow
+    $innerStaging = Join-Path $tempDir.FullName "inner_staging"
+    New-Item -ItemType Directory -Force -Path $innerStaging | Out-Null
+    tar xzf "$innerTar.FullName" -C "$innerStaging"
+    $staging = $innerStaging
+  }
+} else {
+  Write-Host "✗ 未知归档格式: $archivePath" -ForegroundColor Red
+  exit 1
+}
 
 # 找到 lingxiao 目录
 $pkgDir = $staging

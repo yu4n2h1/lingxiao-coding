@@ -85,13 +85,15 @@ echo "★ 版本: ${VERSION}"
 VERSION_NO_V="${VERSION#v}"
 
 # ── 下载 ──────────────────────────────────────────────────────────────────────
-# 尝试多种文件名：无版本号 → 带v前缀 → 不带v前缀
-# 归档格式统一为 tar.gz（全平台兼容，解压比 zip 快 3-5x）
+# 尝试多种文件名 + 两种归档格式（tar.gz 优先，zip 兼容旧 release）
 DOWNLOAD_CANDIDATES=""
 for NAME in \
   "lingxiao-${TARGET}.tar.gz" \
   "lingxiao-${VERSION}-${TARGET}.tar.gz" \
-  "lingxiao-${VERSION_NO_V}-${TARGET}.tar.gz"
+  "lingxiao-${VERSION_NO_V}-${TARGET}.tar.gz" \
+  "lingxiao-${TARGET}.zip" \
+  "lingxiao-${VERSION}-${TARGET}.zip" \
+  "lingxiao-${VERSION_NO_V}-${TARGET}.zip"
 do
   DOWNLOAD_CANDIDATES="${DOWNLOAD_CANDIDATES} https://github.com/${REPO}/releases/download/${VERSION}/${NAME}"
 done
@@ -117,12 +119,36 @@ fi
 
 # ── 解压 ──────────────────────────────────────────────────────────────────────
 echo "▸ 解压..."
-# tar.gz 全平台兼容，解压比 zip 快 3-5x
 STAGING="${TMP_DIR}/staging"
 mkdir -p "$STAGING"
-tar xzf "$ARCHIVE_FILE" -C "$STAGING"
 
-# 找到 lingxiao 目录（tar.gz 顶层就是 lingxiao/）
+case "$ARCHIVE_FILE" in
+  *.tar.gz)
+    tar xzf "$ARCHIVE_FILE" -C "$STAGING"
+    ;;
+  *.zip)
+    # 外层 zip：先解 zip，再看里面有没有 tar.gz
+    unzip -q "$ARCHIVE_FILE" -d "$STAGING" 2>/dev/null || tar xf "$ARCHIVE_FILE" -C "$STAGING" 2>/dev/null || {
+      echo "✗ 无法解压 zip 文件"
+      exit 1
+    }
+    # 检查是否有内层 tar.gz
+    INNER_TAR=$(find "$STAGING" -name '*.tar.gz' -print -quit 2>/dev/null)
+    if [ -n "$INNER_TAR" ]; then
+      echo "  ℹ 检测到内层 tar.gz，二次解压..."
+      INNER_STAGING="${TMP_DIR}/inner_staging"
+      mkdir -p "$INNER_STAGING"
+      tar xzf "$INNER_TAR" -C "$INNER_STAGING"
+      STAGING="$INNER_STAGING"
+    fi
+    ;;
+  *)
+    echo "✗ 未知归档格式: $ARCHIVE_FILE"
+    exit 1
+    ;;
+esac
+
+# 找到 lingxiao 目录
 PKG_DIR="$STAGING"
 if [ -d "$STAGING/lingxiao" ]; then
   PKG_DIR="$STAGING/lingxiao"
