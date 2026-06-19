@@ -57,6 +57,18 @@ esac
 TARGET="${PLATFORM}-${ARCH}"
 echo "★ 检测到平台: ${TARGET}"
 
+# 检查是否有对应的 release 产物
+VALID_TARGETS="linux-x64 linux-arm64 darwin-arm64 win32-x64"
+if ! echo " $VALID_TARGETS " | grep -q " ${TARGET} "; then
+  echo "✗ 当前平台 ${TARGET} 暂无预编译包"
+  echo "  支持的平台:"
+  echo "    linux-x64    (Ubuntu / Debian / CentOS 等 x86_64 Linux)"
+  echo "    linux-arm64  (树莓派 / ARM 服务器)"
+  echo "    darwin-arm64 (macOS Apple Silicon M1/M2/M3/M4)"
+  echo "    win32-x64    (Windows x64 — 请使用 PowerShell 脚本安装)"
+  exit 1
+fi
+
 # ── 获取版本 ──────────────────────────────────────────────────────────────────
 if [ -z "$VERSION" ]; then
   echo "▸ 获取最新版本..."
