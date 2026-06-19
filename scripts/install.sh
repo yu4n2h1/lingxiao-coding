@@ -72,8 +72,8 @@ fi
 # ── 获取版本 ──────────────────────────────────────────────────────────────────
 if [ -z "$VERSION" ]; then
   echo "▸ 获取最新版本..."
-  VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-    | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
+  # 用 HTTP 302 重定向拿版本号，不走 GitHub API，避免 rate limit
+  VERSION=$(curl -fsSL -o /dev/null -w '%{redirect_url}' "https://github.com/${REPO}/releases/latest" | sed 's|.*/tag/||')
   if [ -z "$VERSION" ]; then
     echo "✗ 无法获取最新版本，请用 --version 指定"
     exit 1

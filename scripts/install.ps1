@@ -31,8 +31,17 @@ Write-Host "★ 检测到平台: $target" -ForegroundColor Cyan
 # ── 获取版本 ──────────────────────────────────────────────────────────────────
 if ([string]::IsNullOrEmpty($Version)) {
   Write-Host "▸ 获取最新版本..."
-  $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest"
-  $Version = $release.tag_name
+  # 用 HTTP 302 重定向拿版本号，不走 GitHub API，避免 rate limit
+  $resp = Invoke-WebRequest -Uri "https://github.com/$Repo/releases/latest" -MaximumRedirection 0 -ErrorAction SilentlyContinue
+  $redirectUrl = $resp.Headers.Location
+  if (-not $redirectUrl) {
+    # 某些 PowerShell 版本不返回 302 body，用 -SkipHttpErrorCheck 重试
+    try { $resp = Invoke-WebRequest -Uri "https://github.com/$Repo/releases/latest" -MaximumRedirection 0 -SkipHttpErrorCheck } catch {}
+    $redirectUrl = $resp.Headers.Location
+  }
+  if ($redirectUrl -match 'tag/(.+)$') {
+    $Version = $Matches[1]
+  }
   if ([string]::IsNullOrEmpty($Version)) {
     Write-Host "✗ 无法获取最新版本，请用 -Version 指定" -ForegroundColor Red
     exit 1
