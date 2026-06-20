@@ -13,6 +13,7 @@ import { WorkerProcessRunner } from './core/WorkerProcessRunner.js';
 import { coreLogger } from './core/Log.js';
 import { ScheduledTaskManager } from './core/ScheduledTaskManager.js';
 import { ResourceBudgetService } from './core/ResourceBudgetService.js';
+import { UpdateChecker } from './core/UpdateChecker.js';
 import { tempDownloadRegistry } from './core/TempDownloadRegistry.js';
 import { config as runtimeConfig, getConfigValue, startSettingsWatcher, stopSettingsWatcher } from './config.js';
 import { installProcessRuntimeGuards } from './core/RuntimeGuards.js';
@@ -261,6 +262,12 @@ export async function createServerWithDeps(
   registerCleanup(() => {
     resourceBudget.stop();
   }, 8);
+  // ── 启动后自动检查版本更新 ──────────────────────────────────────
+  // 延迟 10s 异步检查 GitHub releases，发现新版本时通过 notification:new
+  // 推送到 TUI / WebUI；每 24h 定期检查；不阻塞启动。
+  const updateChecker = new UpdateChecker(eventEmitter, () => sessionManager.getActiveSessionIds());
+  updateChecker.start();
+  registerCleanup(() => updateChecker.stop(), 8);
 
   /**
    * 验证 server token — 替代原 requireServerToken
