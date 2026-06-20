@@ -2255,7 +2255,7 @@ export default function ChatView() {
       setEditingMessageId(null);
       return;
     }
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !(e.nativeEvent as KeyboardEvent).isComposing) {
       e.preventDefault();
       if (uploadingCount === 0 && (input.trim() || pendingImages.length > 0 || pendingFiles.length > 0)) handleSend();
     }
