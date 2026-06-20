@@ -278,6 +278,22 @@ npm start
 - **Issues**: [Report a bug or request a feature](https://github.com/hexian2001/lingxiao-coding/issues)
 - **Commercial License**: hexian2001@github.com
 
+---
+
 ## Community
 
 本开源项目已链接并认可 [LINUX DO 社区](https://linux.do)。
+
+## 交流群 / QQ Group
+
+<p align="center">
+  <img src="./docs/images/QQ.jpg" width="200" alt="QQ群二维码" />
+</p>
+
+<p align="center">
+  扫码加入 QQ 交流群，获取最新动态、使用帮助和开发者交流。
+</p>
+
+<p align="center">
+  Scan to join our QQ group for updates, support, and developer discussions.
+</p>
