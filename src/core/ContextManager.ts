@@ -147,6 +147,9 @@ export class ContextManager {
       owner: this.owner,
       maxRequestBytes: this.maxRequestBytes,
       maxSingleMessageBytes: this.maxSingleMessageBytes,
+      maxRecentMessageCount: Number(runtimeConfig.context?.max_recent_message_count) || undefined,
+      recentWindowTokenBudget: Number(runtimeConfig.context?.recent_window_token_budget) || undefined,
+      postCompactTokenBudget: Number(runtimeConfig.context?.post_compact_token_budget) || undefined,
     });
     // Initialize checkpoint service if we have a session and workspace
     if (this.sessionId) {

@@ -52,12 +52,14 @@ import type {
   ContextOwner,
   FileRecord,
 } from './CompressionTypes.js';
+import { config as runtimeConfig } from '../../config.js';
+import * as D from '../../config/defaults.js';
 
 const POST_COMPACT_MAX_FILES = 10;
-const POST_COMPACT_TOKEN_BUDGET = 200_000;
+const POST_COMPACT_TOKEN_BUDGET = D.CONTEXT.POST_COMPACT_TOKEN_BUDGET;
 const POST_COMPACT_MAX_TOKENS_PER_FILE = 6_000;
-const RECENT_WINDOW_TOKEN_BUDGET = 150_000;
-const MAX_RECENT_MESSAGE_COUNT = 40;
+const RECENT_WINDOW_TOKEN_BUDGET = D.CONTEXT.RECENT_WINDOW_TOKEN_BUDGET;
+const MAX_RECENT_MESSAGE_COUNT = D.CONTEXT.MAX_RECENT_MESSAGE_COUNT;
 const MAX_SUMMARY_DEPTH = 3;
 const MAX_EVIDENCE_ITEMS = 12;
 const DETERMINISTIC_SUMMARY_CHAR_BUDGET = 40_000;
@@ -110,6 +112,18 @@ export class CompressionPipeline {
 
   get owner(): ContextOwner {
     return this.options.owner;
+  }
+  /** 从 options 或 config 读取的有效值，未配置时回退到模块常量默认值 */
+  private effectiveMaxRecentMessageCount(): number {
+    return this.options.maxRecentMessageCount ?? MAX_RECENT_MESSAGE_COUNT;
+  }
+
+  private effectiveRecentWindowTokenBudget(): number {
+    return this.options.recentWindowTokenBudget ?? RECENT_WINDOW_TOKEN_BUDGET;
+  }
+
+  private effectivePostCompactTokenBudget(): number {
+    return this.options.postCompactTokenBudget ?? POST_COMPACT_TOKEN_BUDGET;
   }
 
   /**
@@ -633,7 +647,7 @@ export class CompressionPipeline {
       tokenBudget += allTokenCounts[i];
       count += 1;
 
-      if (count >= MAX_RECENT_MESSAGE_COUNT || tokenBudget >= RECENT_WINDOW_TOKEN_BUDGET) {
+      if (count >= this.effectiveMaxRecentMessageCount() || tokenBudget >= this.effectiveRecentWindowTokenBudget()) {
         break;
       }
     }
@@ -817,7 +831,7 @@ export class CompressionPipeline {
   }
 
   private recordCharBudget(): number {
-    return Math.max(1, Math.floor(this.options.maxTokens / Math.max(1, MAX_RECENT_MESSAGE_COUNT)));
+    return Math.max(1, Math.floor(this.options.maxTokens / Math.max(1, this.effectiveMaxRecentMessageCount())));
   }
 
   private compactPlainText(text: string, maxChars: number): string {
@@ -1304,7 +1318,7 @@ export class CompressionPipeline {
       }
 
       totalBudget += countTokens(content);
-      if (totalBudget > POST_COMPACT_TOKEN_BUDGET) break;
+      if (totalBudget > this.effectivePostCompactTokenBudget()) break;
 
       result.push(`### ${path}\n\`\`\`\n${content}\n\`\`\``);
     }

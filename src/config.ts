@@ -326,6 +326,16 @@ const ContextGroupSchema = z.object({
   max_consecutive_failures: z.number().default(D.CONTEXT.MAX_CONSECUTIVE_FAILURES),
   max_request_bytes: z.number().default(D.CONTEXT.MAX_REQUEST_BYTES),
   max_single_message_bytes: z.number().default(D.CONTEXT.MAX_SINGLE_MESSAGE_BYTES),
+  /** 压缩后保留的系统消息数 */
+  preserved_system_count: z.number().int().positive().default(D.CONTEXT.PRESERVED_SYSTEM_COUNT),
+  /** 压缩后保留的最近消息数 */
+  preserved_recent_count: z.number().int().positive().default(D.CONTEXT.PRESERVED_RECENT_COUNT),
+  /** 最近窗口最大消息条数 */
+  max_recent_message_count: z.number().int().positive().default(D.CONTEXT.MAX_RECENT_MESSAGE_COUNT),
+  /** 压缩后总 token 预算 */
+  post_compact_token_budget: z.number().int().positive().default(D.CONTEXT.POST_COMPACT_TOKEN_BUDGET),
+  /** 最近窗口 token 预算 */
+  recent_window_token_budget: z.number().int().positive().default(D.CONTEXT.RECENT_WINDOW_TOKEN_BUDGET),
 });
 
 const TruncationGroupSchema = z.object({

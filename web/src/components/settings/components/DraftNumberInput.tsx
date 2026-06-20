@@ -6,6 +6,7 @@ export function DraftNumberInput({
   onSave,
   min = 0,
   max,
+  step,
   placeholder,
   className = 'w-24',
   saving,
@@ -15,6 +16,7 @@ export function DraftNumberInput({
   onSave: (value: number) => void;
   min?: number;
   max?: number;
+  step?: number;
   placeholder?: string;
   className?: string;
   saving?: boolean;
@@ -50,6 +52,7 @@ export function DraftNumberInput({
         placeholder={placeholder}
         min={min}
         max={max}
+        step={step}
         className={`min-h-8 min-w-0 rounded border border-border-input bg-bg-input px-2 py-1 text-xs font-mono text-text-primary transition-colors focus:border-accent-brand ${className}`}
       />
       {saving && <Loader2 className="w-3 h-3 text-accent-brand animate-spin" />}

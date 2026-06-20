@@ -47,6 +47,10 @@ const CATEGORY_MAP: Record<string, string[]> = {
   '上下文': [
     'context.token_limit', 'context.autocompact_buffer_tokens',
     'context.compact_llm_timeout_ms', 'context.max_consecutive_failures',
+    'context.preserved_system_count', 'context.preserved_recent_count',
+    'context.max_recent_message_count', 'context.post_compact_token_budget',
+    'context.recent_window_token_budget', 'context.max_request_bytes',
+    'context.max_single_message_bytes', 'context.autocompact_ratio',
   ],
   '截断': [
     'truncation.shell_stdout_max', 'truncation.shell_stderr_max',

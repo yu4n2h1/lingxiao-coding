@@ -88,6 +88,16 @@ export interface CompressionPipelineOptions {
   maxRequestBytes?: number;
   /** 单条消息字节上限，超过即「中段截断 + 全文归档」 */
   maxSingleMessageBytes?: number;
+  /** 压缩后保留的系统消息数 */
+  preservedSystemCount?: number;
+  /** 压缩后保留的最近消息数 */
+  preservedRecentCount?: number;
+  /** 最近窗口最大消息条数 */
+  maxRecentMessageCount?: number;
+  /** 压缩后总 token 预算（文件快照注入用） */
+  postCompactTokenBudget?: number;
+  /** 最近窗口 token 预算 */
+  recentWindowTokenBudget?: number;
 }
 
 /** 单次 run() 的运行时上下文 */

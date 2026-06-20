@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Brain, Database, GitBranch, Globe, Loader2, Monitor, Settings, Shield, Zap, Users, Info, Server, Activity } from 'lucide-react';
+import { Brain, Database, GitBranch, Globe, Loader2, Monitor, Settings, Shield, Zap, Users, Info, Server, Activity, Layers } from 'lucide-react';
 import { useThemeStore } from '../../stores/themeStore';
 import { SettingsNav } from './components/SettingsNav';
 import { notifySettingChanged, SETTINGS_CHANGED_EVENT, settingsApiFetch, type SettingsChangedDetail } from './settingsApi';
@@ -17,6 +17,7 @@ import { AppearanceSection } from './sections/AppearanceSection';
 import { RolesSection } from './sections/RolesSection';
 import { SystemInfoSection } from './sections/SystemInfoSection';
 import { LangfuseSection } from './sections/LangfuseSection';
+import { ContextSection } from './sections/ContextSection';
 
 function isProviderInfoArray(value: unknown): value is ProviderInfo[] {
   return Array.isArray(value) && value.every((provider) => (
@@ -100,6 +101,7 @@ export default function SettingsView() {
     { id: 'model', label: t('settings.group.modelAndReasoning'), icon: Brain },
     { id: 'git', label: t('settings.group.gitIntegration'), icon: GitBranch },
     { id: 'behavior', label: t('settings.group.behavior'), icon: Zap },
+    { id: 'context', label: t('settings.group.context'), icon: Layers },
     { id: 'memory', label: t('settings.group.memory'), icon: Database },
     { id: 'network-proxy', label: t('settings.group.networkProxy'), icon: Globe },
     { id: 'mcp', label: t('settings.group.mcp'), icon: Server },
@@ -132,6 +134,7 @@ export default function SettingsView() {
               <ModelAndReasoningSection settings={settings} providers={providers} saveState={saveState} onSave={handleSave} onProvidersChange={setProviders} onRefreshSettings={fetchSettings} />
               <GitIntegrationSection settings={settings} saveState={saveState} onSave={handleSave} />
               <BehaviorSection settings={settings} saveState={saveState} externalAgentsStatus={externalAgentsStatus} onSave={handleSave} />
+              <ContextSection settings={settings} saveState={saveState} onSave={handleSave} />
               <MemorySection settings={settings} saveState={saveState} onSave={handleSave} />
               <NetworkProxySection settings={settings} saveState={saveState} onSave={handleSave} />
               <McpSection settings={settings} saveState={saveState} onSave={handleSave} />

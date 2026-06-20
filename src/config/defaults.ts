@@ -74,15 +74,15 @@ export const AGENT = {
   /** 最大并发 Agent 数 */
   MAX_CONCURRENT: 5,
   /** Agent 最大迭代次数 */
-  MAX_ITERATIONS: 200,
+  MAX_ITERATIONS: 300,
   /** Agent 最大运行时间 (分钟) — 24×7 模式给足时间，大型任务可能需要数小时 */
   MAX_RUNTIME_MINUTES: 480,
   /** 权限请求超时 (ms) */
   PERMISSION_TIMEOUT_MS: 300_000,
   /** 对话最大消息数 */
-  MAX_CONVERSATION_MESSAGES: 500,
+  MAX_CONVERSATION_MESSAGES: 800,
   /** 单 Agent 最大消息数 */
-  MAX_AGENT_MESSAGES: 300,
+  MAX_AGENT_MESSAGES: 500,
   /** 工具结果默认截断长度 */
   TOOL_RESULT_MAX_CHARS: 4_000,
   /** 最大续接深度 */
@@ -104,7 +104,7 @@ export const TOOLS = {
 
 export const LEADER = {
   /** Leader 最大工具轮次 */
-  MAX_TOOL_ROUNDS: 100,
+  MAX_TOOL_ROUNDS: 200,
   /** Leader 最大运行时间 (分钟) — 24×7 模式持续运行 */
   MAX_RUNTIME_MINUTES: 480,
   /** Leader 探测沉默阈值 (秒) — Agent 启动后首次静默多久开始探测 */
@@ -207,7 +207,7 @@ export const CONTEXT = {
   /** 最近窗口 token 预算 */
   RECENT_WINDOW_TOKEN_BUDGET: 150_000,
   /** 最近消息最大条数 */
-  MAX_RECENT_MESSAGE_COUNT: 40,
+  MAX_RECENT_MESSAGE_COUNT: 80,
   /** 分块 token 预算 */
   CHUNK_TOKEN_BUDGET: 8_000,
   /** 最大摘要深度 */
@@ -215,7 +215,7 @@ export const CONTEXT = {
   /** 保留系统消息数 */
   PRESERVED_SYSTEM_COUNT: 3,
   /** 保留最近消息数 */
-  PRESERVED_RECENT_COUNT: 24,
+  PRESERVED_RECENT_COUNT: 40,
   /** 压缩后工具结果最大长度 */
   COMPRESSED_TOOL_RESULT_MAX: 200,
 } as const;

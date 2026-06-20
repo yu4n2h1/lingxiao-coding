@@ -28,9 +28,6 @@ export function BehaviorSection({
       <SettingsRow label={t('settings.item.maxConcurrency')} desc={t('settings.item.maxConcurrency.desc')} error={errors.maxConcurrency}>
         <DraftNumberInput value={settingNumber(settings.maxConcurrency, 5)} onSave={(value) => { void onSave('maxConcurrency', value); }} min={1} max={20} saving={saving.maxConcurrency} saved={saved.maxConcurrency} />
       </SettingsRow>
-      <SettingsRow label={t('settings.item.autoCompactEnabled')} error={errors.autoCompactEnabled}>
-        <SettingsToggle value={settings.autoCompactEnabled !== false} onChange={(v) => onSave('autoCompactEnabled', v)} saving={saving.autoCompactEnabled} saved={saved.autoCompactEnabled} />
-      </SettingsRow>
       <SettingsRow label={t('settings.item.enableStreaming')} error={errors.enableStreaming}>
         <SettingsToggle value={settings.enableStreaming !== false} onChange={(v) => onSave('enableStreaming', v)} saving={saving.enableStreaming} saved={saved.enableStreaming} />
       </SettingsRow>
