@@ -848,11 +848,19 @@ function withDefaultConfigGroups(input: unknown): unknown {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
   const raw = { ...(input as Record<string, unknown>) };
   normalizeCodexStyleRootConfig(raw);
+  normalizeLegacyConfigKeys(raw);
   for (const group of CONFIG_DEFAULT_GROUPS) {
     if (!raw[group]) raw[group] = {};
   }
   normalizeRawModelProviders(raw);
   return raw;
+}
+
+function normalizeLegacyConfigKeys(raw: Record<string, unknown>): void {
+  const llm = raw.llm;
+  if (llm && typeof llm === 'object' && !Array.isArray(llm)) {
+    delete (llm as Record<string, unknown>).stream_chunk_timeout_s;
+  }
 }
 
 function normalizeCodexStyleRootConfig(raw: Record<string, unknown>): void {
