@@ -1,6 +1,6 @@
 {
   "name": "lingxiao_cli",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "凌霄剑域 - 动态智能编排系统 (Node.js 版本)",
   "main": "dist/index.js",
   "type": "module",
@@ -22,10 +22,6 @@
     "build:package": "node scripts/build.mjs --package",
     "build:web": "node scripts/build.mjs --web-only",
     "build:server": "node scripts/build.mjs --server-only",
-    "desktop:dev": "npm run build && electron dist/desktop/main.js",
-    "desktop:pack": "npm run build && electron-builder --dir",
-    "desktop:msi": "npm run build && electron-builder --win msi --publish never",
-    "desktop:publish": "npm run build && electron-builder --win nsis --publish always",
     "package:portable": "node scripts/package-portable.mjs",
     "build:binary": "node scripts/build-binary.mjs",
     "fetch-models": "node scripts/fetch-models-snapshot.mjs",
@@ -63,14 +59,12 @@
     "LICENSE"
   ],
   "keywords": [],
-  "author": "LingXiao",
+  "author": "",
   "license": "UNLICENSED",
   "devDependencies": {
     "@types/node": "^25.5.0",
     "@types/pdfkit": "^0.17.6",
     "@types/react": "^19.2.14",
-    "electron": "^42.4.1",
-    "electron-builder": "^26.15.3",
     "nodemon": "^3.1.14",
     "ts-node": "^10.9.2",
     "tsx": "^4.22.4",
@@ -99,7 +93,6 @@
     "@lydell/node-pty": "1.2.0-beta.10",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@nodesecure/js-x-ray": "^11.1.0",
-    "electron-updater": "^6.8.9",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/sdk-node": "^0.219.0",
     "@slidev/cli": "^52.15.2",
@@ -156,71 +149,5 @@
     "esbuild": "0.28.1",
     "traverse": "0.3.9",
     "@jridgewell/trace-mapping": "^0.3.25"
-  },
-  "build": {
-    "appId": "cn.lingxiao.desktop",
-    "productName": "LingXiao",
-    "directories": {
-      "output": "release/desktop"
-    },
-    "extraMetadata": {
-      "main": "dist/desktop/main.js"
-    },
-    "msiProjectCreated": "scripts/patch-msi-project-codepage.cjs",
-    "files": [
-      "dist/**/*",
-      "package.json",
-      "LICENSE"
-    ],
-    "extraResources": [
-      {
-        "from": "skills",
-        "to": "skills",
-        "filter": [
-          "**/*",
-          "!bundled/huashu-design/assets/**/*"
-        ]
-      }
-    ],
-    "asarUnpack": [
-      "**/*.node"
-    ],
-    "publish": {
-      "provider": "github",
-      "owner": "hexian2001",
-      "repo": "lingxiao-coding",
-      "releaseType": "release"
-    },
-    "win": {
-      "icon": "build-resources/icon.ico",
-      "target": [
-        "msi",
-        "nsis",
-        "portable"
-      ]
-    },
-    "msi": {
-      "oneClick": false,
-      "runAfterFinish": false,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "additionalLightArgs": [
-        "-cultures:zh-cn"
-      ],
-      "shortcutName": "凌霄",
-      "menuCategory": "凌霄"
-    },
-    "mac": {
-      "target": [
-        "dmg"
-      ],
-      "category": "public.app-category.developer-tools"
-    },
-    "linux": {
-      "target": [
-        "AppImage"
-      ],
-      "category": "Development"
-    }
   }
 }

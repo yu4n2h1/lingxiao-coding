@@ -1,192 +1,174 @@
-/// <reference types="electron" />
-import { app, BrowserWindow, Menu, shell } from 'electron';
-import { existsSync } from 'fs';
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
-import { generateDefaultSettings, config as runtimeConfig } from '../config.js';
-import { createServer, findAvailablePort, removePortFile, warnIfInsecureHostBinding, writePortFile } from '../server.js';
-import { registerCleanup, runAllCleanups } from '../core/index.js';
-import { isHardenedMode } from '../core/HardeningPolicy.js';
+/**
+ * Electron 主进程入口 — 桌面端自动更新与 IPC
+ *
+ * 仅在 Electron 环境下运行；通过动态 import electron-updater 避免在非桌面构建中引入硬依赖。
+ * 暴露 IPC 通道：update:status / update:relaunch / update:checkAndDownload
+ * 事件通道：update:downloaded / update:downloadProgress / update:error
+ */
 
+// 动态加载 electron 和 electron-updater（非桌面环境不会执行此文件）
+import type { app as AppType, BrowserWindow, ipcMain } from 'electron';
+
+interface AutoUpdaterModule {
+  autoUpdater: {
+    checkForUpdatesAndNotify: () => Promise<unknown>;
+    checkForUpdates: () => Promise<{ downloadPromise?: Promise<unknown> } | null>;
+    downloadUpdate: () => Promise<unknown>;
+    on: (event: string, listener: (...args: unknown[]) => void) => void;
+    quitAndInstall: () => void;
+  };
+}
+
+let updateDownloaded = false;
+let updateVersion: string | null = null;
 let mainWindow: BrowserWindow | null = null;
-let shutdownStarted = false;
 
-// ── Auto-updater ──────────────────────────────────────────────────────────────
-// electron-updater 在打包后的 MSI/NSIS 安装版中自动检查 GitHub Releases。
-// 开发模式（非 packaged）下跳过，避免无谓报错。
+/**
+ * 启动桌面端更新检查与 IPC 通道注册。
+ * 在 Electron app ready 之后调用。
+ */
+export async function startDesktopUpdater(
+  electron: typeof import('electron'),
+  updaterModule: AutoUpdaterModule,
+): Promise<void> {
+  const { app, ipcMain: ipc, BrowserWindow: Win } = electron;
+  const { autoUpdater } = updaterModule;
 
-let updateNotificationShown = false;
+  // --- IPC: 查询更新状态 ---
+  ipc.handle('update:status', () => ({
+    updateDownloaded,
+    updateVersion,
+  }));
 
-async function setupAutoUpdater(): Promise<void> {
-  if (!app.isPackaged) return;
-
-  let autoUpdater;
-  try {
-    const mod = await import('electron-updater');
-    autoUpdater = mod.autoUpdater;
-  } catch {
-    console.warn('[Updater] electron-updater 不可用，跳过自动更新。');
-    return;
-  }
-
-  autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
-
-  autoUpdater.on('checking-for-update', () => {
-    console.log('[Updater] 正在检查更新...');
+  // --- IPC: 重启应用 ---
+  ipc.handle('update:relaunch', () => {
+    app.relaunch();
+    app.exit(0);
   });
 
-  autoUpdater.on('update-available', (info) => {
-    console.log(`[Updater] 发现新版本: ${info.version}，开始下载...`);
-  });
-
-  autoUpdater.on('update-not-available', () => {
-    console.log('[Updater] 当前版本已是最新。');
-  });
-
-  autoUpdater.on('download-progress', (progress) => {
-    const percent = progress.percent.toFixed(1);
-    console.log(`[Updater] 下载中: ${percent}% (${progress.transferred}/${progress.total} bytes)`);
-  });
-
-  autoUpdater.on('update-downloaded', () => {
-    console.log('[Updater] 更新已下载，将在退出时自动安装。');
-    // 通知主窗口展示更新提示（通过 webContents executeJavaScript 注入 toast）
-    if (mainWindow && !updateNotificationShown) {
-      updateNotificationShown = true;
-      mainWindow.webContents.executeJavaScript(
-        `if (window.showToast) { window.showToast('新版本已下载，重启后生效。', 'info', 8000); }`
-      ).catch(() => {/* 窗口可能还没准备好 */});
+  // --- IPC: 检查并下载更新 ---
+  ipc.handle('update:checkAndDownload', async () => {
+    try {
+      const result = await autoUpdater.checkForUpdates();
+      if (result) {
+        // checkForUpdates 返回 UpdateCheckResult，如果有更新会自动开始下载
+        // 但在某些配置下需要手动调用 downloadUpdate
+        await autoUpdater.downloadUpdate();
+      }
+      return { success: true };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('update:error', { message });
+      }
+      return { success: false, error: message };
     }
   });
 
-  autoUpdater.on('error', (err) => {
-    console.error('[Updater] 检查更新失败:', err?.message || err);
+  // --- electron-updater 事件: 下载进度 ---
+  autoUpdater.on('download-progress', (progress: unknown) => {
+    const p = progress as { percent?: number; transferred?: number; total?: number };
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update:downloadProgress', {
+        percent: p?.percent ?? 0,
+        transferred: p?.transferred ?? 0,
+        total: p?.total ?? 0,
+      });
+    }
   });
 
-  // 启动后 5 秒检查更新，之后每 4 小时检查一次
-  setTimeout(() => {
-    autoUpdater.checkForUpdates().catch(() => {/* 静默失败 */});
-  }, 5_000);
+  // --- electron-updater 事件: 错误 ---
+  autoUpdater.on('error', (err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update:error', { message });
+    }
+  });
 
+  // --- electron-updater 事件: 下载完成 ---
+  autoUpdater.on('update-downloaded', (info: unknown) => {
+    const releaseInfo = info as { version?: string };
+    updateDownloaded = true;
+    updateVersion = releaseInfo?.version ?? null;
+
+    // 通知所有渲染进程
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update:downloaded', { updateVersion });
+    }
+  });
+
+  // 自动检查更新
+  try {
+    await autoUpdater.checkForUpdatesAndNotify();
+  } catch {
+    // 静默失败 — 开发环境或无网络时不影响使用
+  }
+
+  // 定期检查（每4小时）
   setInterval(() => {
-    autoUpdater.checkForUpdates().catch(() => {/* 静默失败 */});
+    autoUpdater.checkForUpdatesAndNotify().catch(() => {});
   }, 4 * 60 * 60 * 1000);
 }
 
-function resolveIconPath(): string | undefined {
-  const __dirname = dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    join(__dirname, '..', 'web', 'public', 'logo.svg'),
-    join(__dirname, '..', '..', 'web', 'public', 'logo.svg'),
-  ];
-  return candidates.find((candidate) => existsSync(candidate));
+/**
+ * 设置主窗口引用，用于向渲染进程发送 IPC 消息。
+ */
+export function setMainWindow(win: BrowserWindow | null): void {
+  mainWindow = win;
 }
 
-function configureDesktopResourcePaths(): void {
-  const bundledSkillsDir = app.isPackaged
-    ? join(process.resourcesPath, 'skills', 'bundled')
-    : join(process.cwd(), 'skills', 'bundled');
+/**
+ * 创建桌面端应用窗口。
+ * 此函数仅在 Electron 环境中被调用。
+ */
+export async function createDesktopWindow(
+  port: number,
+): Promise<void> {
+  // 动态导入 electron
+  const electron = await import('electron');
+  const { app, BrowserWindow } = electron;
 
-  if (!process.env.LINGXIAO_BUNDLED_SKILLS_DIR && existsSync(bundledSkillsDir)) {
-    process.env.LINGXIAO_BUNDLED_SKILLS_DIR = bundledSkillsDir;
-  }
-}
+  await app.whenReady();
 
-async function startDesktopServer(): Promise<string> {
-  configureDesktopResourcePaths();
-  generateDefaultSettings();
-
-  const { fastify: server, token } = await createServer();
-  const webHost = runtimeConfig.server.host;
-  const requestedPort = runtimeConfig.server.random_port ? 0 : runtimeConfig.server.port;
-
-  warnIfInsecureHostBinding(webHost, isHardenedMode());
-
-  let actualPort = requestedPort;
-  try {
-    await server.listen({ host: webHost, port: requestedPort });
-    const address = server.server.address();
-    actualPort = (address && typeof address === 'object' ? address.port : null) ?? requestedPort;
-  } catch (err: unknown) {
-    if (err instanceof Error && 'code' in err && (err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
-      actualPort = await findAvailablePort(runtimeConfig.server.port, webHost);
-      await server.listen({ host: webHost, port: actualPort });
-    } else {
-      throw err;
+  // 性能优化 (T-8)：GPU 进程崩溃处理 — exe 打包后在部分 Windows 机器上 GPU
+  // 进程可能崩溃导致软件渲染卡顿。监听 child-process-gone 事件记录 GPU 崩溃。
+  app.on('child-process-gone', (_event: unknown, details: { reason?: string; type?: string; exitCode?: number }) => {
+    if (details?.type === 'GPU') {
+      console.error('[desktop] GPU child process gone:', details.reason, 'exitCode:', details.exitCode);
     }
-  }
+  });
 
-  writePortFile(actualPort, webHost);
-  registerCleanup(() => removePortFile(), 2);
-  registerCleanup(() => server.close(), 3);
-
-  const displayHost = webHost === '0.0.0.0' ? 'localhost' : webHost;
-  const baseUrl = `http://${displayHost}:${actualPort}`;
-  return token ? `${baseUrl}?token=${encodeURIComponent(token)}` : baseUrl;
-}
-
-function createMainWindow(url: string): BrowserWindow {
-  const icon = resolveIconPath();
-  const window = new BrowserWindow({
+  const win = new BrowserWindow({
     width: 1440,
-    height: 960,
-    minWidth: 1100,
-    minHeight: 720,
-    show: false,
-    title: 'LingXiao',
-    ...(icon ? { icon } : {}),
+    height: 900,
     webPreferences: {
+      preload: `${__dirname}/preload.js`,
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
+      // 性能优化 (T-8)：禁用后台节流，避免窗口失焦时定时器/动画被限流导致卡顿。
+      backgroundThrottling: false,
     },
   });
 
-  window.once('ready-to-show', () => {
-    window.show();
-  });
+  setMainWindow(win);
 
-  window.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
-    void shell.openExternal(targetUrl);
-    return { action: 'deny' };
-  });
+  // 尝试加载本地 web 服务器
+  await win.loadURL(`http://localhost:${port}`);
 
-  void window.loadURL(url);
-  return window;
-}
-
-async function shutdown(): Promise<void> {
-  if (shutdownStarted) return;
-  shutdownStarted = true;
-  removePortFile();
-  await runAllCleanups(10_000);
-}
-
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    void shutdown().finally(() => app.quit());
+  // 动态加载 electron-updater（可选依赖）
+  try {
+    const updaterModule = await import('electron-updater') as unknown as AutoUpdaterModule;
+    await startDesktopUpdater(electron, updaterModule);
+  } catch {
+    // electron-updater 不可用 — 跳过自动更新
   }
-});
+}
 
-app.on('before-quit', (event) => {
-  if (shutdownStarted) return;
-  event.preventDefault();
-  void shutdown().finally(() => app.quit());
-});
-
-void app.whenReady().then(async () => {
-  Menu.setApplicationMenu(null);
-  const url = await startDesktopServer();
-  mainWindow = createMainWindow(url);
-  setupAutoUpdater().catch(() => {/* 静默失败 */});
-
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      mainWindow = createMainWindow(url);
-    }
+// 当通过 electron 命令直接运行时启动桌面端
+if (typeof process !== 'undefined' && (process.versions as Record<string, string | undefined>).electron) {
+  const port = parseInt(process.env.LINGXIAO_PORT || '8080', 10);
+  createDesktopWindow(port).catch((err) => {
+    console.error('[desktop] Failed to start:', err);
+    process.exit(1);
   });
-}).catch((err: unknown) => {
-  console.error('[Desktop] Failed to start:', err);
-  app.quit();
-});
+}
