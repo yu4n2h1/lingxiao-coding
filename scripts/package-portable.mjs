@@ -117,10 +117,15 @@ async function createTarGz(root, dest) {
   execSync(`tar czf "${dest}" -C "${root}" .`, { stdio: 'inherit' });
 }
 
-// ── 创建 zip（Windows 平台用） ─────────────────────────────────────────
+// ── 创建 zip（跨平台：Windows 用 PowerShell，其他用 zip） ──────────
 async function createZip(root, dest) {
-  // 使用系统 zip 命令；CI 环境通常预装
-  execSync(`cd "${root}" && zip -r -q "${dest}" .`, { stdio: 'inherit' });
+  if (process.platform === 'win32') {
+    // Windows 上使用 PowerShell 的 Compress-Archive
+    const psCmd = `Compress-Archive -Path '${root}\\*' -DestinationPath '${dest}' -Force`;
+    execSync(`powershell -NoProfile -Command "${psCmd}"`, { stdio: 'inherit' });
+  } else {
+    execSync(`cd "${root}" && zip -r -q "${dest}" .`, { stdio: 'inherit' });
+  }
 }
 
 // ── 构建单个平台的便携包 ───────────────────────────────────────────────
