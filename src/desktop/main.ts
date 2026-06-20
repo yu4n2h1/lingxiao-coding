@@ -1,4 +1,6 @@
+/// <reference types="electron" />
 import { app, BrowserWindow, Menu, shell } from 'electron';
+/// <reference types="electron-updater" />
 import { autoUpdater, UpdateCheckResult } from 'electron-updater';
 import { existsSync } from 'fs';
 import { dirname, join } from 'path';
