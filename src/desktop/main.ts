@@ -13,7 +13,7 @@ let shutdownStarted = false;
 function resolveIconPath(): string | undefined {
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const candidates = [
-    join(__dirname, '..', 'web', 'logo.svg'),
+    join(__dirname, '..', 'web', 'public', 'logo.svg'),
     join(__dirname, '..', '..', 'web', 'public', 'logo.svg'),
   ];
   return candidates.find((candidate) => existsSync(candidate));
