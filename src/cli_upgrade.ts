@@ -99,8 +99,71 @@ type InstallType = 'portable' | 'npm' | 'source';
 function detectInstallType(): { type: InstallType; installDir?: string } {
   const scriptPath = dirname(fileURLToPath(import.meta.url));
 
-  // 便携版：/opt/lingxiao/lingxiao → scriptPath 类似 /opt/lingxiao/dist
-  // 特征：同级或上级有 lingxiao 可执行文件，且路径含 lingxiao
+  // ── 策略 1：通过 `which lingxiao` + readlink 反向追踪真实安装路径 ──
+  // 这是唯一可靠的全局入口探测方式，无论 npm link / 便携版 / 手动 symlink 都能找到
+  const whichResult = spawnSync('which', ['lingxiao'], { encoding: 'utf-8', timeout: 5000 });
+  if (whichResult.status === 0 && whichResult.stdout.trim()) {
+    let binPath = whichResult.stdout.trim();
+
+    // 递归解析 symlink（npm link 会创建 /usr/local/bin/lingxiao → .../bin/lingxiao.js → ...）
+    let resolved = binPath;
+    for (let i = 0; i < 10; i++) {
+      const readlink = spawnSync('readlink', ['-f', resolved], { encoding: 'utf-8', timeout: 5000 });
+      if (readlink.status !== 0 || !readlink.stdout.trim()) break;
+      const next = readlink.stdout.trim();
+      if (next === resolved) break;
+      resolved = next;
+    }
+
+    // resolved 现在指向真实文件，例如：
+    //   源码安装：/root/lingxiao/lingxiao_cli/lingxiao-coding/bin/lingxiao.js
+    //   npm 全局：/usr/lib/node_modules/lingxiao_cli/bin/lingxiao.js
+    //   便携版：  /opt/lingxiao/bin/lingxiao.js 或 /opt/lingxiao/lingxiao
+
+    // 从真实路径向上查找项目根目录（含 package.json 且 name=lingxiao_cli）
+    let dir = dirname(resolved);
+    for (let i = 0; i < 8; i++) {
+      const pkgPath = join(dir, 'package.json');
+      if (existsSync(pkgPath)) {
+        try {
+          const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
+          if (pkg.name === 'lingxiao_cli') {
+            // 判断安装类型
+            if (dir.includes('node_modules')) {
+              return { type: 'npm', installDir: dir };
+            }
+            // 检查是否有 .git 目录 → 源码安装
+            if (existsSync(join(dir, '.git'))) {
+              return { type: 'source', installDir: dir };
+            }
+            // 无 .git 但有 package.json → 便携版（解压的预构建包）
+            return { type: 'portable', installDir: dir };
+          }
+        } catch { /* package.json 解析失败，继续向上找 */ }
+      }
+      const parent = dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  }
+
+  // ── 策略 2：fallback — 从 scriptPath（当前 dist 目录）推断 ──
+  // dist/cli_upgrade.js → 项目根 = dirname(scriptPath)
+  const projectRoot = dirname(scriptPath);
+  const pkgPath = join(projectRoot, 'package.json');
+  if (existsSync(pkgPath)) {
+    try {
+      const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
+      if (pkg.name === 'lingxiao_cli') {
+        if (existsSync(join(projectRoot, '.git'))) {
+          return { type: 'source', installDir: projectRoot };
+        }
+        return { type: 'portable', installDir: projectRoot };
+      }
+    } catch { /* ignore */ }
+  }
+
+  // ── 策略 3：legacy fallback — 原有逻辑 ──
   const possibleBinaryDirs = [
     join(scriptPath, '..'),
     join(scriptPath, '..', '..'),
@@ -110,20 +173,18 @@ function detectInstallType(): { type: InstallType; installDir?: string } {
     const binPath = join(dir, 'lingxiao');
     const binCmdPath = join(dir, 'lingxiao.cmd');
     if (existsSync(binPath) || existsSync(binCmdPath)) {
-      // 检查是否是便携安装目录（不在 node_modules 内）
       if (!dir.includes('node_modules')) {
         return { type: 'portable', installDir: dir };
       }
     }
   }
 
-  // npm 全局安装：路径含 node_modules
   if (scriptPath.includes('node_modules')) {
     return { type: 'npm' };
   }
 
-  // 源码开发
-  return { type: 'source' };
+  // 无法确定，返回 source + cwd
+  return { type: 'source', installDir: process.cwd() };
 }
 
 // ── 下载并解压 ────────────────────────────────────────────────────────────────
@@ -279,8 +340,92 @@ export async function runUpgrade(opts: UpgradeOptions = {}): Promise<void> {
   }
 
   if (installInfo.type === 'source') {
-    console.log(chalk.cyan('\n源码开发模式，请手动拉取最新代码：'));
-    console.log(chalk.bold('  git pull && npm install && npm run build'));
+    // 源码安装：自动 git pull + npm install + npm run build
+    const sourceDir = installInfo.installDir
+      ? (installInfo.installDir.includes('dist')
+          ? dirname(installInfo.installDir)
+          : installInfo.installDir)
+      : process.cwd();
+
+    // 确认是 git 仓库
+    const gitCheck = spawnSync('git', ['rev-parse', '--is-inside-work-tree'], {
+      cwd: sourceDir, encoding: 'utf-8', timeout: 5000,
+    });
+
+    if (gitCheck.status !== 0) {
+      console.log(chalk.cyan('\n源码开发模式（非 git 仓库），请手动更新：'));
+      console.log(chalk.bold('  git pull && npm install && npm run build'));
+      return;
+    }
+
+    try {
+      console.log(chalk.cyan(`\n▸ 源码安装模式，自动升级 (目录: ${sourceDir})`));
+
+      // 1. git fetch + reset 到最新 tag（避免本地修改冲突）
+      console.log(chalk.cyan('▸ 拉取最新代码...'));
+      const gitFetch = spawnSync('git', ['fetch', '--tags', 'origin'], {
+        cwd: sourceDir, stdio: 'inherit', timeout: 60000,
+      });
+      if (gitFetch.status !== 0) {
+        throw new Error('git fetch 失败，请检查网络或手动执行 git pull');
+      }
+
+      // checkout 到最新 release tag
+      const gitCheckout = spawnSync('git', ['checkout', release.tag], {
+        cwd: sourceDir, stdio: 'inherit', timeout: 30000,
+      });
+      if (gitCheckout.status !== 0) {
+        // checkout 失败可能是本地有修改，尝试 stash + pull
+        console.log(chalk.yellow('  ⚠ checkout 失败，尝试 stash 后 pull...'));
+        spawnSync('git', ['stash'], { cwd: sourceDir, stdio: 'inherit', timeout: 10000 });
+        const gitPull = spawnSync('git', ['pull', 'origin', 'main'], {
+          cwd: sourceDir, stdio: 'inherit', timeout: 60000,
+        });
+        if (gitPull.status !== 0) {
+          throw new Error('git pull 失败，请手动解决冲突后重试');
+        }
+      }
+
+      // 2. npm install
+      console.log(chalk.cyan('▸ 安装依赖...'));
+      const npmInstall = spawnSync('npm', ['install'], {
+        cwd: sourceDir, stdio: 'inherit', timeout: 300000,
+      });
+      if (npmInstall.status !== 0) {
+        throw new Error('npm install 失败');
+      }
+
+      // 3. npm run build
+      console.log(chalk.cyan('▸ 构建项目...'));
+      const npmBuild = spawnSync('npm', ['run', 'build'], {
+        cwd: sourceDir, stdio: 'inherit', timeout: 300000,
+      });
+      if (npmBuild.status !== 0) {
+        throw new Error('npm run build 失败');
+      }
+
+      // 4. npm link（刷新全局链接）
+      console.log(chalk.cyan('▸ 刷新全局链接...'));
+      const npmLink = spawnSync('npm', ['link'], {
+        cwd: sourceDir, stdio: 'inherit', timeout: 30000,
+      });
+      if (npmLink.status !== 0) {
+        console.log(chalk.yellow('  ⚠ npm link 失败，可能需要手动执行 sudo npm link'));
+      }
+
+      console.log('');
+      console.log(chalk.green('╔══════════════════════════════════════════════════════════════╗'));
+      console.log(chalk.green('║  ✓ 凌霄剑域升级完成                                          ║'));
+      console.log(chalk.green(`║  ${currentVersion} → ${release.tag}`));
+      console.log(chalk.green(`║  安装目录: ${sourceDir}`));
+      console.log(chalk.green('╚══════════════════════════════════════════════════════════════╝'));
+      console.log('');
+      console.log(chalk.dim('如需恢复旧版本，执行: git checkout v' + currentVersion));
+    } catch (err) {
+      console.error(chalk.red(`✗ 升级失败: ${(err as Error).message}`));
+      console.error(chalk.yellow('可手动执行: git pull && npm install && npm run build'));
+      process.exit(1);
+    }
     return;
   }
 
