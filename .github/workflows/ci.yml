@@ -1,10 +1,12 @@
 name: CI
 
 on:
-  push:
-    branches: [main, master]
-  pull_request:
-    branches: [main, master]
+  workflow_dispatch:
+  # CI 已禁用自动触发，仅在手动 dispatch 时运行
+  # push:
+  #   branches: [main, master]
+  # pull_request:
+  #   branches: [main, master]
 
 # 同一分支新 push 时取消旧的 CI
 concurrency:
