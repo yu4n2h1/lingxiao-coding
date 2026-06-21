@@ -17,7 +17,7 @@
 import type { app as AppType, BrowserWindow, ipcMain } from 'electron';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { spawn, type ChildProcess } from 'child_process';
+import { fork, type ChildProcess } from 'child_process';
 import { createConnection } from 'net';
 import { readFileSync, existsSync } from 'fs';
 import { homedir } from 'os';
@@ -219,9 +219,11 @@ function spawnBackend(): ChildProcess {
   const cliPath = join(__dirname, '..', 'cli.js');
   console.log(`[desktop] Spawning backend: ${cliPath} (random port)`);
 
-  // 使用 spawn 而非 fork：fork 要求 stdio 含 'ipc' 通道，而这里不需要 IPC。
-  // 同时设置 ELECTRON_RUN_AS_NODE=1，让 Electron 二进制以普通 Node.js 模式运行子进程。
-  const child = spawn(process.execPath, [cliPath, 'daemon'], {
+  // 使用 fork 而非 spawn：fork 专为 Node.js 子进程设计，正确处理模块路径，
+  // 不会像 spawn 那样在 ELECTRON_RUN_AS_NODE 模式下被 Electron bootstrap 脚本插入 argv。
+  // fork 要求 stdio 含 'ipc' 通道（即使不使用 IPC 通信也必须存在）。
+  // ELECTRON_RUN_AS_NODE=1 让 Electron 二进制以普通 Node.js 模式运行。
+  const child = fork(cliPath, ['daemon'], {
     env: {
       ...process.env,
       ELECTRON_RUN_AS_NODE: '1',
@@ -229,7 +231,7 @@ function spawnBackend(): ChildProcess {
       LINGXIAO_WEB_PORT: '0',
       LINGXIAO_SKIP_MODELS_SNAPSHOT: '1',
     },
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
 
   child.stdout?.on('data', (data: Buffer) => {
