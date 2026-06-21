@@ -1571,7 +1571,15 @@ worktreeCmd
 
 registerAgentsCommands(program);
 
+// 桌面端通过 LINGXIAO_FORCE_COMMAND 环境变量指定命令，绕过 Electron argv 插入问题。
 // 无子命令时默认执行 start；顶层启动参数如 `lingxiao -s <id>` 也归一化到 start。
-process.argv = normalizeDefaultStartArgs(process.argv);
+const forceCmd = process.env.LINGXIAO_FORCE_COMMAND;
+if (forceCmd) {
+  // argv[0]=node, argv[1]=script；保留后续 flags，把命令插到正确位置
+  const args = process.argv.slice(2).filter(a => !a.endsWith('cli.js') && a !== forceCmd);
+  process.argv = [process.argv[0], process.argv[1], forceCmd, ...args];
+} else {
+  process.argv = normalizeDefaultStartArgs(process.argv);
+}
 
 program.parse();
