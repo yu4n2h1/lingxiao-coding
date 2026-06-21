@@ -15,7 +15,7 @@
 
 // 动态加载 electron 和 electron-updater（非桌面环境不会执行此文件）
 import type { app as AppType, BrowserWindow, ipcMain } from 'electron';
-import { fileURLToPath, pathToFileURL } from 'url';
+import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { spawn, type ChildProcess } from 'child_process';
 import { createConnection } from 'net';
@@ -219,18 +219,13 @@ function spawnBackend(): ChildProcess {
   const cliPath = join(__dirname, '..', 'cli.js');
   console.log(`[desktop] Spawning backend: ${cliPath} (random port)`);
 
-  // 用 -e 内联代码彻底绕过 Electron argv 插入问题。
-  // Electron 在 ELECTRON_RUN_AS_NODE 模式下仍可能在 argv 中插入 bootstrap 脚本路径，
-  // 导致 Commander 把 cli.js 路径误认为命令名（"unknown command"）。
-  // 通过 -e 执行内联代码，我们完全控制 process.argv 后再动态 import cli.js。
-  const cliUrl = pathToFileURL(cliPath).href;
-  const entryCode = `process.argv=[process.argv[0],'cli.js','daemon'];import(${JSON.stringify(cliUrl)})`;
-
-  const child = spawn(process.execPath, ['-e', entryCode], {
+  // 与 DaemonManager.startDaemon 相同的 spawn 模式，避免 -e hack 在打包后 argv 不可靠
+  const child = spawn(process.execPath, [cliPath, 'start', '--daemon-mode'], {
     env: {
       ...process.env,
       ELECTRON_RUN_AS_NODE: '1',
       LINGXIAO_DAEMON_MODE: '1',
+      LINGXIAO_FORCE_COMMAND: 'start',
       LINGXIAO_WEB_PORT: '0',
       LINGXIAO_SKIP_MODELS_SNAPSHOT: '1',
     },
