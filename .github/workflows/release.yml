@@ -261,8 +261,7 @@ jobs:
           
           tar xzf lingxiao-v${VERSION}-linux-x64.tar.gz
           cd lingxiao
-          ./lingxiao
-          ```
+          \`\`\`
 
           **源码编译**
           \`\`\`bash
