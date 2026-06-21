@@ -15,7 +15,7 @@
 import { config as runtimeConfig } from '../config.js';
 import { LLM } from '../config/defaults.js';
 import { classifyLLMError, formatLLMErrorLabel, LLMError, type LLMErrorKind } from '../llm/errors.js';
-import { getCircuitBreaker, CircuitOpenError, resetCircuitBreakersForProvider } from '../llm/CircuitBreaker.js';
+import { getCircuitBreaker, CircuitOpenError } from '../llm/CircuitBreaker.js';
 import type { ChatMessage, ChatResponse, StreamCallbacks, ToolDefinition } from '../llm/types.js';
 import type { ContentGenerator, GenerateContentParams } from '../llm/ContentGenerator.js';
 import { coreLogger } from '../core/Log.js';
@@ -421,6 +421,14 @@ export class LlmGuard {
         // 否则每次超时都被清零、阈值永远到不了、CB 永不熔断，挂起的 provider 会反复重试
         // ~180s×预算 直到烧光（历史回归）。CB 只在半开探测成功后由其内部复位。
         //
+        // recycle 后 CB 不需要手动 reset：HALF_OPEN 探针使用的是 recycle 后的新 client，
+        // 如果 provider 已恢复，探针成功 → onSuccess() → CB CLOSED；如果仍不可用，探针失败
+        // → CB 重新 OPEN。这正是 CircuitBreaker 设计的预期行为。
+        //
+        // 历史 bug：此前在 recycle 后调用 resetCircuitBreakersForProvider，导致 CB 失败计数
+        // 每次都被清零，FAILURE_THRESHOLD(8) 永远到不了，CB 形同虚设。provider 挂起时
+        // 系统反复跑完整超时预算（最坏 9×180s=27min），前端/TUI/后端全部表现为卡死。
+        //
         // 空流 / 空响应（provider 返回 200 但 body 全空）已在 errors.ts 归入 network_error。
         // 抖动靠 backoff（±20% jitter）+ CircuitBreaker 控制即可。
         if (
@@ -431,15 +439,9 @@ export class LlmGuard {
         ) {
           try {
             llm.recycle?.();
-            // recycle 已销毁旧 SDK client + undici Agent，旧失败计数不再适用于新 client。
-            // 重置该 provider 在所有 scope 下的 CB 状态，让新 client 从干净状态开始。
-            // 否则新 client 仍被旧失败计数熔断，HALF_OPEN 探针用的还是旧死连接。
-            if (providerKey) {
-              resetCircuitBreakersForProvider(providerKey);
-            }
             const trigger = firstTokenController.signal.aborted ? 'first-token-timeout' : classified.llmErrorKind;
             coreLogger.warn(
-              `[LlmGuard:${this.actorLabel}] ${trigger} retry=${this.retryCount + 1} → recycled LLM client + reset CB (fresh socket pool) provider="${providerKey ?? '?'}"`,
+              `[LlmGuard:${this.actorLabel}] ${trigger} retry=${this.retryCount + 1} → recycled LLM client (fresh socket pool, CB count preserved) provider="${providerKey ?? '?'}"`,
             );
           } catch (recycleErr) {
             coreLogger.warn(
