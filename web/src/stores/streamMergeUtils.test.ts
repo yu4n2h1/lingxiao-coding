@@ -321,6 +321,52 @@ test('runtime snapshot preserves explicit leader busy for reconnect resync', () 
   assert.equal(patch.phase, 'preparing');
 });
 
+test('runtime snapshot running worker overrides stale terminal agent conversation status', () => {
+  const snapshot = coerceSessionRuntimeSnapshot({
+    runtimeState: {
+      sessionId: 's1',
+      workspace: '/repo',
+      sessionStatus: 'active',
+      leader: { running: false, busy: false },
+      runningWorkers: [{
+        agentId: 'a1',
+        name: 'worker-1',
+        roleType: 'coding',
+        taskId: 'T-1',
+        status: 'running',
+        lastActivity: 123,
+      }],
+      runningWorkerCount: 1,
+      hasRunningWorkers: true,
+      eternal: { enabled: false },
+    },
+  });
+
+  assert.ok(snapshot);
+
+  const patch = applyRuntimeSnapshotPatch({
+    ...emptySessionRuntimeState(),
+    sessionId: 's1',
+    activeSessionId: 's1',
+    sessions: [{ id: 's1', workspace: '/repo', status: 'active', createdAt: 1 }],
+    agents: [{ agentId: 'a1', agentName: 'worker-1', role: 'coding', status: 'interrupted', taskId: 'T-1' }],
+    agentConversations: {
+      a1: {
+        agentId: 'a1',
+        agentName: 'worker-1',
+        role: 'coding',
+        status: 'interrupted',
+        taskId: 'T-1',
+        messages: [],
+      },
+    },
+  } as never, snapshot, true);
+
+  assert.equal(patch.agents?.find((agent) => agent.agentId === 'a1')?.status, 'running');
+  assert.equal(patch.agentConversations?.a1?.status, 'running');
+  assert.equal(patch.phase, 'preparing');
+});
+
 // 回归:正常轮次结束后(waiting gate)Web UI 卡在"处理中",要刷新页面才回 idle。
 // 根因:applyRuntimeSnapshotPatch 对「存在 wait gate」一律跳过 settleRuntimeIdleResidue,
 // 导致纯工具/无文本响应留下的 isStreaming 占位消息永不被清理 → hasOpenSessionWork() 恒真

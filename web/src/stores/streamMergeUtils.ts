@@ -1030,7 +1030,11 @@ export function applyRuntimeSnapshotPatch(
     if (!existing) {
       agentConversations[worker.agentId] = { agentId: worker.agentId, agentName: worker.name || worker.agentId, role: worker.roleType || 'worker', status: 'running', taskId: worker.taskId, messages: [] };
     } else {
-      agentConversations[worker.agentId] = { ...existing, agentName: existing.agentName || worker.name || worker.agentId, role: existing.role || worker.roleType || 'worker', status: mergeAgentStatus(existing.status, 'running') as AgentConversation['status'], taskId: existing.taskId ?? worker.taskId };
+      // runningWorkers is a backend liveness fact from the active AgentPool. It must
+      // override a stale optimistic terminal status left by stopAgent(); otherwise a
+      // stopped agent that is respawned keeps rendering as interrupted even though
+      // the runtime snapshot already proves it is running again.
+      agentConversations[worker.agentId] = { ...existing, agentName: existing.agentName || worker.name || worker.agentId, role: existing.role || worker.roleType || 'worker', status: 'running', taskId: existing.taskId ?? worker.taskId };
     }
   }
   if (noWorkersRemain && !busy) {
