@@ -11,6 +11,31 @@ import { isHardenedMode } from '../core/HardeningPolicy.js';
 let mainWindow: BrowserWindow | null = null;
 let shutdownStarted = false;
 
+const TRUTHY_ENV_VALUES = new Set(['1', 'true', 'yes', 'on']);
+const FALSY_ENV_VALUES = new Set(['0', 'false', 'no', 'off']);
+
+function hasArg(name: string): boolean {
+  return process.argv.some((arg) => arg === name || arg.startsWith(`${name}=`));
+}
+
+function shouldUseReducedEffects(): boolean {
+  const envValue = process.env.LINGXIAO_REDUCED_EFFECTS?.trim().toLowerCase();
+  if (envValue && TRUTHY_ENV_VALUES.has(envValue)) return true;
+  if (envValue && FALSY_ENV_VALUES.has(envValue)) return false;
+
+  if (hasArg('--lingxiao-full-effects')) return false;
+  if (hasArg('--lingxiao-reduced-effects') || hasArg('--low-effects')) return true;
+
+  // Windows MSI/NSIS/portable 包默认启用低特效，降低 Electron 渲染端在高频日志/聊天刷新时的重绘成本。
+  return app.isPackaged && process.platform === 'win32';
+}
+
+function appendUrlParam(url: string, key: string, value: string): string {
+  const parsed = new URL(url);
+  parsed.searchParams.set(key, value);
+  return parsed.toString();
+}
+
 // ── Auto-updater ──────────────────────────────────────────────────────────────
 // electron-updater 在打包后的 MSI/NSIS 安装版中自动检查 GitHub Releases。
 // 开发模式（非 packaged）下跳过，避免无谓报错。
@@ -123,7 +148,8 @@ async function startDesktopServer(): Promise<string> {
 
   const displayHost = webHost === '0.0.0.0' ? 'localhost' : webHost;
   const baseUrl = `http://${displayHost}:${actualPort}`;
-  return token ? `${baseUrl}?token=${encodeURIComponent(token)}` : baseUrl;
+  const webUrl = token ? `${baseUrl}?token=${encodeURIComponent(token)}` : baseUrl;
+  return shouldUseReducedEffects() ? appendUrlParam(webUrl, 'reducedEffects', '1') : webUrl;
 }
 
 function createMainWindow(url: string): BrowserWindow {

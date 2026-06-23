@@ -167,6 +167,7 @@
       "main": "dist/desktop/main.js"
     },
     "msiProjectCreated": "scripts/patch-msi-project-codepage.cjs",
+    "afterPack": "scripts/prune-electron-unpacked.cjs",
     "files": [
       "dist/**/*",
       "package.json",

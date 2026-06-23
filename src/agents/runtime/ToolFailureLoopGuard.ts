@@ -90,6 +90,8 @@ const NON_TRIPPING_ERROR_KINDS: ReadonlySet<ToolFailureErrorKind> = new Set([
 ]);
 
 export interface ToolFailureLoopGuardOptions {
+  /** 显式开启失败熔断；默认读取 LINGXIAO_TOOL_FAILURE_LOOP_GUARD，未设置时关闭。 */
+  enabled?: boolean;
   /** 同一 key 连续失败次数阈值；默认 3。 */
   threshold?: number;
   /** trip 后保留记忆时长（ms），防止快速重试再次触发；默认 60_000。 */
@@ -145,6 +147,18 @@ export interface LoopGuardDecision {
 const DEFAULT_THRESHOLD = 3;
 const DEFAULT_TRIPPED_RETENTION_MS = 60_000;
 const DEFAULT_MAX_KEYS = 256;
+
+function isTruthyEnv(value: string | undefined): boolean {
+  return /^(1|true|yes|on)$/i.test((value ?? '').trim());
+}
+
+/**
+ * Disabled by default: this guard can hide the original tool error/recovery hint.
+ * Enable only for diagnostics with LINGXIAO_TOOL_FAILURE_LOOP_GUARD=1.
+ */
+export function isToolFailureLoopGuardEnabled(): boolean {
+  return isTruthyEnv(process.env.LINGXIAO_TOOL_FAILURE_LOOP_GUARD);
+}
 
 // ─── 工具函数 ────────────────────────────────────────
 
@@ -203,6 +217,7 @@ export function classifyToolFailure(errorCode: string, errorMessage: string): To
  * BaseAgentRuntime / AgentHealthMonitor / LeaderPermissionManager 各自订阅并按职责响应。
  */
 export class ToolFailureLoopGuard {
+  private readonly enabled: boolean;
   private readonly threshold: number;
   private readonly trippedRetentionMs: number;
   private readonly maxKeysPerSession: number;
@@ -216,6 +231,7 @@ export class ToolFailureLoopGuard {
     private readonly options: ToolFailureLoopGuardOptions = {},
     private emitter?: EventEmitter,
   ) {
+    this.enabled = options.enabled ?? isToolFailureLoopGuardEnabled();
     this.threshold = Math.max(2, options.threshold ?? DEFAULT_THRESHOLD);
     this.trippedRetentionMs = options.trippedRetentionMs ?? DEFAULT_TRIPPED_RETENTION_MS;
     this.maxKeysPerSession = Math.max(16, options.maxKeysPerSession ?? DEFAULT_MAX_KEYS);
@@ -256,6 +272,20 @@ export class ToolFailureLoopGuard {
     const sessionId = input.sessionId || '<unknown>';
     const errorKind = classifyToolFailure(input.errorCode, input.errorMessage);
     const argsHash = hashArgs(normalizeArgsForHash(input.args));
+    if (!this.enabled) {
+      return {
+        tripped: false,
+        count: 0,
+        errorKind,
+        signature: {
+          toolName: input.toolName,
+          argsHash,
+          errorKind,
+          errorCode: input.errorCode || '',
+        },
+        requiresEscalation: false,
+      };
+    }
     const key = `${input.toolName}::${argsHash}::${errorKind}`;
     const now = Date.now();
 

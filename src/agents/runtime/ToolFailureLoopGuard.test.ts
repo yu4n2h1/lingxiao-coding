@@ -17,6 +17,21 @@ import {
 } from './ToolFailureLoopGuard.js';
 
 describe('ToolFailureLoopGuard', () => {
+  it('is disabled by default and never trips unless explicitly enabled', () => {
+    const guard = new ToolFailureLoopGuard({ threshold: 2 });
+    const base = { sessionId: 's0', agentId: 'a0', agentName: 'A0', toolName: 'shell', args: { cmd: 'ls' }, errorCode: 'PERMISSION_REQUIRED', errorMessage: '需要权限' };
+
+    const first = guard.record(base);
+    const second = guard.record(base);
+    const third = guard.record(base);
+
+    assert.equal(first.tripped, false);
+    assert.equal(second.tripped, false);
+    assert.equal(third.tripped, false);
+    assert.equal(third.count, 0);
+    assert.equal(guard.snapshot('s0').length, 0);
+  });
+
   it('classifies errorKind by errorCode', () => {
     assert.equal(classifyToolFailure('PERMISSION_REQUIRED', '需要 dev 权限'), 'permission');
     assert.equal(classifyToolFailure('MODE_TOOL_FORBIDDEN', 'office 模式禁止'), 'mode');
@@ -38,7 +53,7 @@ describe('ToolFailureLoopGuard', () => {
   });
 
   it('trips after threshold=3 on same key', () => {
-    const guard = new ToolFailureLoopGuard({ threshold: 3 });
+    const guard = new ToolFailureLoopGuard({ enabled: true, threshold: 3 });
     const base = { sessionId: 's1', agentId: 'a1', agentName: 'A1', toolName: 'shell', args: { cmd: 'ls' }, errorCode: 'PERMISSION_REQUIRED', errorMessage: '需要权限' };
 
     const d1 = guard.record(base);
@@ -58,7 +73,7 @@ describe('ToolFailureLoopGuard', () => {
   });
 
   it('different argsHash keeps counts separate', () => {
-    const guard = new ToolFailureLoopGuard({ threshold: 2 });
+    const guard = new ToolFailureLoopGuard({ enabled: true, threshold: 2 });
     const base = { sessionId: 's1', agentId: 'a1', agentName: 'A1', toolName: 'shell', errorCode: 'PERMISSION_REQUIRED', errorMessage: '需要权限' };
 
     const d1 = guard.record({ ...base, args: { cmd: 'ls' } });
@@ -73,7 +88,7 @@ describe('ToolFailureLoopGuard', () => {
   });
 
   it('different errorKind keeps counts separate', () => {
-    const guard = new ToolFailureLoopGuard({ threshold: 2 });
+    const guard = new ToolFailureLoopGuard({ enabled: true, threshold: 2 });
     const base = { sessionId: 's1', agentId: 'a1', agentName: 'A1', toolName: 'shell', args: { cmd: 'ls' }, errorMessage: '' };
 
     const d1 = guard.record({ ...base, errorCode: 'PERMISSION_REQUIRED' });
@@ -88,7 +103,7 @@ describe('ToolFailureLoopGuard', () => {
   });
 
   it('does not trip guided precondition failures such as FILE_MUST_BE_READ_FIRST', () => {
-    const guard = new ToolFailureLoopGuard({ threshold: 3 });
+    const guard = new ToolFailureLoopGuard({ enabled: true, threshold: 3 });
     const base = {
       sessionId: 's1',
       agentId: 'a1',
@@ -113,7 +128,7 @@ describe('ToolFailureLoopGuard', () => {
 
   it('emits agent:tool_failure_loop event on trip', () => {
     const emitter = new EventEmitter();
-    const guard = new ToolFailureLoopGuard({ threshold: 2 }, emitter);
+    const guard = new ToolFailureLoopGuard({ enabled: true, threshold: 2 }, emitter);
     const received: EventMap['agent:tool_failure_loop'][] = [];
     emitter.on('agent:tool_failure_loop', (data) => { received.push(data); });
 
@@ -130,7 +145,7 @@ describe('ToolFailureLoopGuard', () => {
 
   it('subsequent failures after trip return tripped=true without re-emitting', () => {
     const emitter = new EventEmitter();
-    const guard = new ToolFailureLoopGuard({ threshold: 1 }, emitter);
+    const guard = new ToolFailureLoopGuard({ enabled: true, threshold: 1 }, emitter);
     let emitCount = 0;
     emitter.on('agent:tool_failure_loop', () => { emitCount += 1; });
 
@@ -143,7 +158,7 @@ describe('ToolFailureLoopGuard', () => {
   });
 
   it('clearOnSuccess wipes matching records', () => {
-    const guard = new ToolFailureLoopGuard({ threshold: 2 });
+    const guard = new ToolFailureLoopGuard({ enabled: true, threshold: 2 });
     const base = { sessionId: 's1', agentId: 'a1', agentName: 'A1', toolName: 'shell', args: { cmd: 'ls' }, errorCode: 'PERMISSION_REQUIRED', errorMessage: '' };
 
     guard.record(base);
@@ -155,7 +170,7 @@ describe('ToolFailureLoopGuard', () => {
   });
 
   it('snapshot returns records per session', () => {
-    const guard = new ToolFailureLoopGuard({ threshold: 5 });
+    const guard = new ToolFailureLoopGuard({ enabled: true, threshold: 5 });
     const base = { sessionId: 'sX', agentId: 'a1', agentName: 'A1', args: { cmd: 'ls' }, errorCode: 'PERMISSION_REQUIRED', errorMessage: '' };
 
     guard.record({ ...base, toolName: 'shell' });

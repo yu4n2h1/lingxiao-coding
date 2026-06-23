@@ -201,6 +201,44 @@ body {
   color: var(--color-text-primary);
 }
 
+/*
+ * Electron reduced-effects mode.
+ * Windows packaged desktop builds enable this by default from src/desktop/main.ts.
+ * It keeps layout and business UI intact while removing high-cost paint/compositor effects
+ * that caused MSI-installed builds to feel sluggish on chat/log/terminal-heavy screens.
+ */
+:root[data-reduced-effects="true"] {
+  --motion-fast: 1ms;
+  --motion-base: 1ms;
+  --motion-slow: 1ms;
+  --breath-period: 1ms;
+  --glass-edge: none;
+  --shadow-flat: none;
+  --shadow-card: none;
+  --shadow-floating: none;
+  --glow-brand: none;
+  scroll-behavior: auto !important;
+}
+
+:root[data-reduced-effects="true"] *,
+:root[data-reduced-effects="true"] *::before,
+:root[data-reduced-effects="true"] *::after {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+  will-change: auto !important;
+}
+
+:root[data-reduced-effects="true"] *,
+:root[data-reduced-effects="true"] *::before,
+:root[data-reduced-effects="true"] *::after {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow: none !important;
+  filter: none !important;
+  text-shadow: none !important;
+}
+
 #root {
   position: relative;
   min-height: 100vh;
