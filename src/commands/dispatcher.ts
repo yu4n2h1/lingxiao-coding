@@ -45,6 +45,16 @@ import {
   OFFICE_TOOL_NAMES,
   WORKFLOW_TOOL_NAMES,
 } from '../contracts/constants/leaderToolDefinitions.js';
+import {
+  AUTONOMY_LIFECYCLE_PHASES,
+  AUTONOMY_MODES,
+  coerceAutonomyModeAlias,
+  isAutonomyLifecyclePhase,
+  isAutonomyMode,
+  normalizeAutonomyLifecyclePhase,
+  normalizeAutonomyMode,
+} from '../contracts/types/Autonomy.js';
+
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -536,6 +546,50 @@ function handleRouteCommand(ctx: CommandHandlerContext): CommandResult {
     return systemMessage('用法: /route <auto|direct|delegate>');
   }
   const result = sessionManager.setExecutionRoutePreference(currentSessionId, mode);
+  return systemMessage(result.message);
+}
+
+function handleAutonomyCommand(ctx: CommandHandlerContext): CommandResult {
+  const { currentSessionId, sessionManager, db, args } = ctx;
+  if (!currentSessionId) return systemMessage('当前没有活动会话');
+
+  const sub = (args[0] || 'status').toLowerCase();
+  if (sub === 'status') {
+    const mode = normalizeAutonomyMode(db.getSessionState(currentSessionId, SESSION_KEYS.AUTONOMY_MODE));
+    const lifecyclePhase = normalizeAutonomyLifecyclePhase(db.getSessionState(currentSessionId, SESSION_KEYS.AUTONOMY_LIFECYCLE_PHASE));
+    const rawGeneration = db.getSessionState(currentSessionId, SESSION_KEYS.AUTONOMY_MODE_GENERATION);
+    const numericGeneration = typeof rawGeneration === 'number'
+      ? rawGeneration
+      : typeof rawGeneration === 'string'
+        ? Number(rawGeneration)
+        : NaN;
+    const generation = Number.isFinite(numericGeneration) && numericGeneration >= 1 ? Math.trunc(numericGeneration) : 1;
+    const policyId = db.getSessionState(currentSessionId, SESSION_KEYS.AUTONOMY_POLICY_ID);
+    const policyHash = db.getSessionState(currentSessionId, SESSION_KEYS.AUTONOMY_POLICY_HASH);
+    return systemMessage([
+      `Autonomy: ${mode}`,
+      `Lifecycle: ${lifecyclePhase}`,
+      `Generation: ${generation}`,
+      `Policy: ${typeof policyId === 'string' && policyId.trim() ? policyId : '(none)'}`,
+      `Hash: ${typeof policyHash === 'string' && policyHash.trim() ? policyHash : '(none)'}`,
+    ].join('\n'));
+  }
+
+  const canonical = coerceAutonomyModeAlias(sub);
+  if (!isAutonomyMode(canonical)) {
+    return systemMessage(`用法: /autonomy <status|${AUTONOMY_MODES.join('|')}|full_auto> [${AUTONOMY_LIFECYCLE_PHASES.join('|')}]`);
+  }
+
+  const phaseArg = args[1]?.toLowerCase();
+  if (phaseArg && !isAutonomyLifecyclePhase(phaseArg)) {
+    return systemMessage(`Lifecycle phase 必须是: ${AUTONOMY_LIFECYCLE_PHASES.join('|')}`);
+  }
+
+  const result = sessionManager.setAutonomyMode(currentSessionId, canonical, {
+    lifecyclePhase: phaseArg,
+    updatedBy: 'tui',
+    reason: 'slash_command_autonomy',
+  });
   return systemMessage(result.message);
 }
 
@@ -1526,6 +1580,7 @@ const commandRegistry = new Map<string, CommandHandler>([
   ['/workflow', handleWorkflowCommand],
   ['/team', handleTeamCommand],
   ['/route', handleRouteCommand],
+  ['/autonomy', handleAutonomyCommand],
   ['/eternal', handleEternalCommand],
   ['/mode', handleModeCommand],
   ['/allow-tool', handleToolPermissionCommand],

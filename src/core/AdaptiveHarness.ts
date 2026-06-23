@@ -54,7 +54,22 @@ export type EscalationTrigger =
   | { type: 'build_errors_exceeded'; count: number }
   | { type: 'repair_attempts_exceeded'; count: number }
   | { type: 'timeout_approaching'; remainingMs: number }
-  | { type: 'speculation_all_failed' };
+  | { type: 'speculation_all_failed' }
+  | {
+      /** 同 toolName+argsHash+errorKind 连续失败达到阈值（默认 3）；即 ToolFailureLoopGuard 触发。 */
+      type: 'tool_permission_loop';
+      toolName: string;
+      errorKind: string;
+      count: number;
+      requiresEscalation: boolean;
+    }
+  | {
+      /** 通用「连续失败超过阈值」信号；与 tool_permission_loop 并列，区别是 errorKind 不是状态类。 */
+      type: 'consecutive_failures_exceeded';
+      toolName: string;
+      errorKind: string;
+      count: number;
+    };
 
 export interface AdaptiveHarnessConfig {
   totalProjectFiles?: number;
@@ -412,6 +427,20 @@ export class AdaptiveHarness {
     }
     if (trigger.type === 'speculation_all_failed') {
       return current === 'speculative' ? 'deep' : null;
+    }
+    if (trigger.type === 'tool_permission_loop') {
+      // 状态类（permission/mode/write_scope/sandbox/network/schema）连续失败时直接跳到 deep：
+      // 继续 standard/careful 只会重复同一次错；deep 启动多 worker 分治或换路径。
+      if (current === 'fast_path') return 'careful';
+      if (current === 'standard' || current === 'careful') return 'deep';
+      if (current === 'speculative') return 'deep';
+      return null;
+    }
+    if (trigger.type === 'consecutive_failures_exceeded') {
+      // 通用非状态类：谨慎升一档，不直接 deep。
+      if (current === 'fast_path') return 'standard';
+      if (current === 'standard') return 'careful';
+      return null;
     }
     return null;
   }

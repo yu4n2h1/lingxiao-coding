@@ -233,7 +233,20 @@ export class LeaderWorkOrchestrator {
 
     if (running.length > 0) {
       lines.push(
-        `running_agents: ${running.slice(0, 4).map((agent) => `@${agent.name}:${agent.taskId}`).join(' | ')}${running.length > 4 ? ` | +${running.length - 4} more` : ''}`,
+        `running_agents: ${running.slice(0, 4).map((agent) => {
+          const parts = [`@${agent.name}:${agent.taskId}`];
+          const elapsed = agent.startTime ? Math.max(0, Math.floor((Date.now() - agent.startTime) / 1000)) : 0;
+          if (elapsed > 0) {
+            parts.push(`${Math.floor(elapsed / 60)}m${String(elapsed % 60).padStart(2, '0')}s`);
+          }
+          if (agent.currentToolName) {
+            parts.push(`[${agent.currentToolName}]`);
+          }
+          if (agent.lastToolResultPreview) {
+            parts.push(`last="${agent.lastToolResultPreview}"`);
+          }
+          return parts.join(' ');
+        }).join(' | ')}${running.length > 4 ? ` | +${running.length - 4} more` : ''}`,
       );
     }
 

@@ -156,7 +156,7 @@ function _listAvailableSkills(baseWorkspace: string): string {
 /**
  * 启动 TUI
  */
-async function startTUI(sessionId?: string): Promise<void> {
+async function startTUI(sessionId?: string, opts?: { tuiOnly?: boolean }): Promise<void> {
   // 清理上一次崩溃/非正常退出遗留的孤儿 Worker 进程（按进程全量扫描 /proc/*/environ）。
   // 必须在任何新 Worker 被创建之前执行，否则同名孤儿会引发“Worker 已存在”/工作区与端口竞态。
   // 不传 sessionId：当前 daemon 自身的 Worker 尚未生成，故清理全部 lingxiao 残留进程。
@@ -324,10 +324,13 @@ async function startTUI(sessionId?: string): Promise<void> {
   }
   setCurrentSessionId(currentSessionId, 'tui');
 
+  // ── --tui-only 模式：跳过 Web Server，仅启动 TUI ──
+  const tuiOnly = opts?.tuiOnly || process.env.LINGXIAO_TUI_ONLY === '1';
+
   // 启动 Web UI 服务器（复用当前 db/sessionManager，传入 TUI 当前会话 ID）
   // ★ 在 Web 服务器启动的同时，后台预热 LLM TCP+TLS 连接，减少首次响应延迟
   //    未初始化时跳过——leader_model 尚未配置
-  if (checkInitialized()) {
+  if (!tuiOnly && checkInitialized()) {
     try {
       const { createLLMClient } = await import('./llm/Client.js');
       const { config: _cfg } = await import('./config.js');
@@ -365,6 +368,10 @@ async function startTUI(sessionId?: string): Promise<void> {
 
   let webUrl: string | undefined;
   let scheduledTaskManager: import('./core/ScheduledTaskManager.js').ScheduledTaskManager | undefined;
+  if (tuiOnly) {
+    // --tui-only 模式：跳过 Web Server，只打印 TUI 模式提示
+    console.log(chalk.dim('  TUI-only 模式：Web UI 服务未启动'));
+  } else {
   try {
     const { createServerWithDeps, findAvailablePort, writePortFile, readPortFile, removePortFile, warnIfInsecureHostBinding } = await import('./server.js');
     const { isHardenedMode } = await import('./core/HardeningPolicy.js');
@@ -478,9 +485,11 @@ async function startTUI(sessionId?: string): Promise<void> {
         console.log(chalk.dim(`  Browser open skipped: ${openResult.plan.diagnostics.join('; ')}`));
       }
     }
-  } catch (err: unknown) {
+  }
+  catch (err: unknown) {
     // Web 服务器启动失败不阻塞 TUI
     console.warn(chalk.yellow(`⚠ Web UI 启动失败: ${toErrorMessage(err)}`));
+  }
   }
 
   // ── 首次初始化引导（Web 服务器已启动，TUI + Web UI 同步可用）──
@@ -1052,8 +1061,9 @@ program
   .option('--worktree [name]', '在隔离的 git worktree 中运行')
   .option('--worktree-branch <branch>', '指定 worktree 创建的分支名')
   .option('--tmux', '使用 tmux 窗格分割（实验性）')
+  .option('--tui-only', '仅启动 TUI，不启动 Web UI 服务')
   .option('-s, --session <id>', '指定要恢复的会话 ID')
-  .action(async (opts: { bg?: boolean; name?: string; daemonMode?: boolean; worktree?: string | boolean; worktreeBranch?: string; tmux?: boolean; outputFormat?: string; session?: string }) => {
+  .action(async (opts: { bg?: boolean; name?: string; daemonMode?: boolean; worktree?: string | boolean; worktreeBranch?: string; tmux?: boolean; tuiOnly?: boolean; outputFormat?: string; session?: string }) => {
     if (process.env.LINGXIAO_NO_AUTO_START === '1') {
       return;
     }
@@ -1113,7 +1123,7 @@ program
 
         // Start TUI in worktree directory
         process.chdir(info.path);
-        await startTUI(opts.session);
+        await startTUI(opts.session, { tuiOnly: opts.tuiOnly });
       } catch (err: unknown) {
         console.error(chalk.red(`✗ Worktree 创建失败: ${toErrorMessage(err)}`));
         process.exit(1);
@@ -1157,7 +1167,7 @@ program
       console.log(chalk.dim(`  日志: ${logPath}`));
       console.log(chalk.dim(`  使用 lingxiao attach ${name} 查看 Web UI 地址`));
     } else {
-      await startTUI(opts.session);
+      await startTUI(opts.session, { tuiOnly: opts.tuiOnly });
     }
   });
 
@@ -1167,6 +1177,14 @@ program
   .argument('<session_id>', 'session_id')
   .action(async (sessionId: string) => {
     await startTUI(sessionId);
+  });
+
+program
+  .command('tui')
+  .description('仅启动 TUI 终端界面（不启动 Web UI 服务）')
+  .option('-s, --session <id>', '指定要恢复的会话 ID')
+  .action(async (opts: { session?: string }) => {
+    await startTUI(opts.session, { tuiOnly: true });
   });
 
 program

@@ -304,9 +304,11 @@ function LlmConfigStep({
 function WorkspaceStep({
   workspacePath,
   onChange,
+  pathError,
 }: {
   workspacePath: string;
   onChange: (v: string) => void;
+  pathError: string;
 }) {
   const { t } = useTranslation();
   const [browsing, setBrowsing] = useState(false);
@@ -369,6 +371,11 @@ function WorkspaceStep({
           </button>
         </div>
       </div>
+
+      {/* Path validation error */}
+      {pathError && (
+        <p className="text-sm" style={{ color: 'var(--color-accent-red)' }}>{pathError}</p>
+      )}
 
       {/* Directory browser */}
       {showBrowser && (
@@ -542,6 +549,7 @@ export default function OnboardingWizard({ onComplete, onSkip }: OnboardingWizar
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const connectingRef = useRef(false);
+  const pathDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Initialize workspace path from current cwd
   useEffect(() => {
@@ -550,6 +558,13 @@ export default function OnboardingWizard({ onComplete, onSkip }: OnboardingWizar
         if (res?.data?.cwd) setWorkspacePath(res.data.cwd);
       })
       .catch(() => {});
+  }, []);
+
+  // 清理防抖定时器
+  useEffect(() => {
+    return () => {
+      if (pathDebounceRef.current) clearTimeout(pathDebounceRef.current);
+    };
   }, []);
 
   const updateLlmConfig = useCallback((patch: Partial<LlmConfig>) => {
@@ -562,23 +577,80 @@ export default function OnboardingWizard({ onComplete, onSkip }: OnboardingWizar
     setTestStatus('testing');
     setTestMessage('');
     try {
-      await settingsApiFetch('/prompt/enhance', {
+      // 用临时配置直接测试 LLM 连接，不依赖已保存的配置
+      await settingsApiFetch('/settings/test-llm', {
         method: 'POST',
-        body: JSON.stringify({ prompt: 'Hello' }),
+        body: JSON.stringify({
+          provider: llmConfig.provider,
+          apiKey: llmConfig.apiKey.trim(),
+          baseUrl: llmConfig.baseUrl.trim() || undefined,
+          model: llmConfig.model.trim(),
+        }),
       });
       setTestStatus('success');
     } catch (e) {
       setTestStatus('error');
       setTestMessage(e instanceof Error ? e.message : 'Unknown error');
     }
-  }, [llmConfig.apiKey, llmConfig.model]);
+  }, [llmConfig.apiKey, llmConfig.model, llmConfig.provider, llmConfig.baseUrl]);
+
+  // workspace 路径验证状态
+  const [pathError, setPathError] = useState('');
 
   const canProceed = useMemo(() => {
     if (step === 1) {
-      return llmConfig.apiKey.trim() !== '' && llmConfig.model.trim() !== '';
+      return llmConfig.apiKey.trim() !== '' && llmConfig.model.trim() !== '' && llmConfig.baseUrl.trim() !== '';
+    }
+    if (step === 2) {
+      // workspace 路径非空且无错误时才允许继续
+      return workspacePath.trim() !== '' && !pathError;
     }
     return true;
-  }, [step, llmConfig]);
+  }, [step, llmConfig, workspacePath, pathError]);
+
+  // 验证 workspace 路径是否存在且是目录
+  const validateWorkspacePath = useCallback(async (path: string) => {
+    const trimmed = path.trim();
+    if (!trimmed) {
+      setPathError('');
+      return;
+    }
+    try {
+      const res = await settingsApiFetch<{ entries?: DirEntry[] }>('/fs/list', {
+        method: 'POST',
+        body: JSON.stringify({ path: trimmed }),
+      });
+      // 如果返回 entries（即使是空数组），说明路径存在且可访问
+      if (Array.isArray(res.entries)) {
+        setPathError('');
+      } else {
+        setPathError(t('onboarding.workspace.pathNotFound'));
+      }
+    } catch {
+      setPathError(t('onboarding.workspace.pathNotFound'));
+    }
+  }, [t]);
+
+  const handleWorkspacePathChange = useCallback((v: string) => {
+    setWorkspacePath(v);
+    // 防抖验证：用 ref 管理定时器，确保上一次 timeout 被清除
+    const trimmed = v.trim();
+    if (!trimmed) {
+      setPathError('');
+      if (pathDebounceRef.current) {
+        clearTimeout(pathDebounceRef.current);
+        pathDebounceRef.current = null;
+      }
+      return;
+    }
+    if (pathDebounceRef.current) {
+      clearTimeout(pathDebounceRef.current);
+    }
+    pathDebounceRef.current = setTimeout(() => {
+      validateWorkspacePath(trimmed);
+      pathDebounceRef.current = null;
+    }, 500);
+  }, [validateWorkspacePath]);
 
   const handleComplete = useCallback(async () => {
     if (connectingRef.current) return;
@@ -721,7 +793,8 @@ export default function OnboardingWizard({ onComplete, onSkip }: OnboardingWizar
           {step === 2 && (
             <WorkspaceStep
               workspacePath={workspacePath}
-              onChange={setWorkspacePath}
+              onChange={handleWorkspacePathChange}
+              pathError={pathError}
             />
           )}
           {step === 3 && (

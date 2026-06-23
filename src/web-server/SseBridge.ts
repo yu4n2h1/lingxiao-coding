@@ -49,6 +49,8 @@ const SESSION_FORWARD_EVENTS = [
   'leader:tool_result',
   'leader:phase_change',
   'leader:text',
+  'leader:capability_intent',
+  'leader:autonomy_decision',
   'leader:llm_retry',
   'leader:tool_progress',
   'chat:user_message',
@@ -85,6 +87,7 @@ const SESSION_FORWARD_EVENTS = [
   'session:renamed',
   'run:explanation_updated',
   // Context（非 compacting / runtime_updated）
+  'context:mutation',
   'context:compressed',
   'context:overflow',
   'session:runtime_state',
@@ -92,6 +95,8 @@ const SESSION_FORWARD_EVENTS = [
   'langfuse:trace',
   // Git activity (commit/push/pull with agent identity + gate result)
   'git:activity',
+  // Generic agent activity (file writes / shell / git / external actions) with session + agent identity
+  'agent:activity',
 ] as const satisfies readonly (EventType & EventName)[];
 
 const AGENT_FORWARD_EVENTS = [

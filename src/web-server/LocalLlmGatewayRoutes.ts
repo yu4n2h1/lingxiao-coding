@@ -152,6 +152,8 @@ function recordUsage(deps: GatewayDeps, request: FastifyRequest, usage: TokenUsa
       total: normalized.total_tokens || 0,
       cache_read: normalized.cache_read_input_tokens || 0,
       cache_creation: normalized.cache_creation_input_tokens || 0,
+      ...(normalized.reasoning_tokens != null ? { reasoning: normalized.reasoning_tokens } : {}),
+      ...(normalized.credit != null ? { credit: normalized.credit } : {}),
     },
   });
 }
@@ -518,12 +520,17 @@ async function callLocalGateway(
     cbScope: `local_gateway::${access.keyId}`,
   });
   const meta = requestMeta(deps, request);
+  // Always stream from upstream: some OpenAI-compatible providers (e.g.
+  // dpc-tcb.chicross.cn) return SSE errors for non-streaming requests while
+  // working fine with stream=true. For non-streaming clients,
+  // generateContentWithCallbacks buffers the stream internally and returns a
+  // complete ChatResponse — no behavior change for the client.
   const response = await guard.call(
     llm,
     params.messages,
     params.model,
     params.tools,
-    streamingEnabled,
+    true,
     signal,
     hooks,
     {

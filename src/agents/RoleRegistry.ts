@@ -179,6 +179,19 @@ export class AgentRoleRegistry {
   }
 
   /**
+   * 删除角色。默认禁止删除系统预设角色，避免把基础能力面删坏。
+   */
+  unregister(name: string, options: { allowSystem?: boolean } = {}): AgentRole | undefined {
+    const role = this.roles.get(name);
+    if (!role) return undefined;
+    if (role.createdBy === 'system' && !options.allowSystem) {
+      return undefined;
+    }
+    this.roles.delete(name);
+    return role;
+  }
+
+  /**
    * 列出所有角色名
    */
   listRoleNames(): string[] {

@@ -47,6 +47,7 @@ import type {
 } from './sessionStoreTypes.ts';
 import { usePermissionStore } from './permissionStore';
 import { useGitActivityStore, type GitActivityEvent } from './gitActivityStore';
+import { useAgentActivityStore, type AgentActivityEvent } from './agentActivityStore';
 import {
   applyConnectionStateForResync,
   applyRuntimeSnapshotPatch,
@@ -190,7 +191,7 @@ type SessionEventPayloadFields = {
   threshold?: number;
   timestamp?: number;
   toTeam?: string;
-  tokenUsage?: { prompt: number; completion: number; total: number; cache_read?: number; cache_creation?: number };
+  tokenUsage?: { prompt: number; completion: number; total: number; cache_read?: number; cache_creation?: number; reasoning?: number; credit?: number };
   tokens?: unknown;
   tool: string;
   toolCalls?: EventToolCall[];
@@ -198,7 +199,7 @@ type SessionEventPayloadFields = {
   totalNodes?: number;
   trigger?: string;
   ts?: number;
-  usage?: { prompt?: number; completion?: number; total?: number; cache_read?: number; cache_creation?: number };
+  usage?: { prompt?: number; completion?: number; total?: number; cache_read?: number; cache_creation?: number; reasoning?: number; credit?: number };
   verdict?: string;
   workerName?: string;
   workingDirectory?: string;
@@ -919,6 +920,30 @@ export function ensureSseListener() {
       };
       useGitActivityStore.getState().addEvent(gitEvent);
       GIT_ACTIVITY_LISTENERS.forEach(fn => fn(gitEvent));
+    }
+
+    // Generic agent activity events (file writes / shell / git / write+execute tools)
+    if (eventType === 'agent:activity' && update) {
+      const agentEvent: AgentActivityEvent = {
+        id: `${update.agentId || 'leader'}-${update.toolName || 'tool'}-${update.timestamp || Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        sessionId: String(update.sessionId || eventSessionId || ''),
+        agentId: String(update.agentId || 'leader'),
+        agentName: String(update.agentName || 'leader'),
+        taskId: typeof update.taskId === 'string' ? update.taskId : undefined,
+        toolName: typeof update.toolName === 'string' ? update.toolName : 'tool',
+        toolCategory: typeof update.toolCategory === 'string' ? update.toolCategory : undefined,
+        toolTier: typeof update.toolTier === 'string' ? update.toolTier : undefined,
+        action: typeof update.action === 'string' ? update.action : undefined,
+        success: update.success !== false,
+        timestamp: typeof update.timestamp === 'number' ? update.timestamp : Date.now(),
+        summary: typeof update.summary === 'string' ? update.summary : undefined,
+        target: typeof update.target === 'string' ? update.target : undefined,
+        files: Array.isArray(update.files) ? update.files.filter((item): item is string => typeof item === 'string') : undefined,
+        command: typeof update.command === 'string' ? update.command : undefined,
+        error: typeof update.error === 'string' ? update.error : undefined,
+      };
+      useAgentActivityStore.getState().addEvent(agentEvent);
+      AGENT_ACTIVITY_LISTENERS.forEach(fn => fn(agentEvent));
     }
   });
 }
@@ -1658,15 +1683,15 @@ function handleSessionUpdatePart8(store: SessionState, update: SessionEventPaylo
         getStore().setState((s) => {
           const conv = s.agentConversations[update.agentId];
           const incomingTs = (update.ts as number | undefined) ?? Date.now();
-          const u = update.usage as { prompt: number; completion: number; total: number; cache_read?: number; cache_creation?: number };
+          const u = update.usage as { prompt: number; completion: number; total: number; cache_read?: number; cache_creation?: number; reasoning?: number; credit?: number };
           let nextConversations = s.agentConversations;
           if (conv) {
             if (conv._lastTokenTs != null && incomingTs < conv._lastTokenTs) return s;
-            const prev = conv.tokenUsage ?? { prompt: 0, completion: 0, total: 0, cache_read: 0, cache_creation: 0 };
-            nextConversations = { ...s.agentConversations, [update.agentId]: { ...conv, _lastTokenTs: incomingTs, tokenUsage: { prompt: prev.prompt + (u.prompt || 0), completion: prev.completion + (u.completion || 0), total: prev.total + (u.total || 0), cache_read: (prev.cache_read ?? 0) + (u.cache_read ?? 0), cache_creation: (prev.cache_creation ?? 0) + (u.cache_creation ?? 0) }, contextRatio: update.contextRatio as number | undefined } };
+            const prev = conv.tokenUsage ?? { prompt: 0, completion: 0, total: 0, cache_read: 0, cache_creation: 0, reasoning: 0, credit: 0 };
+            nextConversations = { ...s.agentConversations, [update.agentId]: { ...conv, _lastTokenTs: incomingTs, tokenUsage: { prompt: prev.prompt + (u.prompt || 0), completion: prev.completion + (u.completion || 0), total: prev.total + (u.total || 0), cache_read: (prev.cache_read ?? 0) + (u.cache_read ?? 0), cache_creation: (prev.cache_creation ?? 0) + (u.cache_creation ?? 0), reasoning: (prev.reasoning ?? 0) + (u.reasoning ?? 0), credit: (prev.credit ?? 0) + (u.credit ?? 0) }, contextRatio: update.contextRatio as number | undefined } };
           } else {
-            const pending = s._pendingTokens?.[update.agentId] ?? { prompt: 0, completion: 0, total: 0, cache_read: 0, cache_creation: 0 };
-            const nextPending = { ...s._pendingTokens, [update.agentId]: { prompt: pending.prompt + (u.prompt || 0), completion: pending.completion + (u.completion || 0), total: pending.total + (u.total || 0), cache_read: (pending.cache_read ?? 0) + (u.cache_read ?? 0), cache_creation: (pending.cache_creation ?? 0) + (u.cache_creation ?? 0) } };
+            const pending = s._pendingTokens?.[update.agentId] ?? { prompt: 0, completion: 0, total: 0, cache_read: 0, cache_creation: 0, reasoning: 0, credit: 0 };
+            const nextPending = { ...s._pendingTokens, [update.agentId]: { prompt: pending.prompt + (u.prompt || 0), completion: pending.completion + (u.completion || 0), total: pending.total + (u.total || 0), cache_read: (pending.cache_read ?? 0) + (u.cache_read ?? 0), cache_creation: (pending.cache_creation ?? 0) + (u.cache_creation ?? 0), reasoning: (pending.reasoning ?? 0) + (u.reasoning ?? 0), credit: (pending.credit ?? 0) + (u.credit ?? 0) } };
             return { _pendingTokens: nextPending, tokenUsage: computeGlobalTokenUsage(nextConversations, nextPending) };
           }
           return { agentConversations: nextConversations, tokenUsage: computeGlobalTokenUsage(nextConversations, s._pendingTokens) };
@@ -1846,6 +1871,13 @@ const GIT_ACTIVITY_LISTENERS = new Set<(event: GitActivityEvent) => void>();
 export function onGitActivity(fn: (event: GitActivityEvent) => void): () => void {
   GIT_ACTIVITY_LISTENERS.add(fn);
   return () => GIT_ACTIVITY_LISTENERS.delete(fn);
+}
+
+const AGENT_ACTIVITY_LISTENERS = new Set<(event: AgentActivityEvent) => void>();
+
+export function onAgentActivity(fn: (event: AgentActivityEvent) => void): () => void {
+  AGENT_ACTIVITY_LISTENERS.add(fn);
+  return () => AGENT_ACTIVITY_LISTENERS.delete(fn);
 }
 
 // Auto-register on import

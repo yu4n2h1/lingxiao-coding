@@ -46,6 +46,8 @@ export class AcpClient {
   private reconnectCycle = 0;
   private manuallyDisconnected = false;
   private sseActive = false;
+  /** 最近一次收到 SSE 数据（含 ping）的时间戳。用于 visibilitychange 时检测 stale 连接。 */
+  private lastSseEventAt = 0;
   private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
   private consecutiveParseErrors = 0;
   private handshakeInProgress = false;
@@ -192,6 +194,7 @@ export class AcpClient {
     };
 
     this.sseActive = true;
+    this.lastSseEventAt = Date.now();
     this.emitConnectionState('connecting');
 
     fetch('/api/v1/acp', { headers, signal: controller.signal })
@@ -234,6 +237,8 @@ export class AcpClient {
               this.scheduleReconnect();
               return;
             }
+            // 更新最近 SSE 数据时间戳，用于 visibilitychange stale 检测
+            this.lastSseEventAt = Date.now();
             buffer += decoder.decode(value, { stream: true });
             // Bound the buffer so a single runaway frame (no newline) cannot grow it
             // without limit; keep the most recent MAX_SSE_BUFFER_CHARS chars.
@@ -345,6 +350,18 @@ export class AcpClient {
       throw new Error(response.error.message || 'JSON-RPC error');
     }
     return response.result;
+  }
+
+  async setAutonomyMode(
+    mode: 'review_first' | 'balanced' | 'autonomous' | 'full_auto',
+    options?: { lifecyclePhase?: 'bootstrap' | 'active' | 'recovery' | 'stable'; reason?: string; updatedBy?: 'web' | 'tui' | 'leader' | 'runtime_policy' },
+  ): Promise<unknown> {
+    return this.sendJsonRpc('session/set_autonomy_mode', {
+      mode,
+      ...(options?.lifecyclePhase ? { lifecycle_phase: options.lifecyclePhase } : {}),
+      ...(options?.reason ? { reason: options.reason } : {}),
+      updated_by: options?.updatedBy ?? 'web',
+    });
   }
 
   /**
@@ -503,9 +520,19 @@ export class AcpClient {
   private attachVisibilityListener() {
     this.detachVisibilityListener();
     this.visibilityHandler = () => {
-      if (document.visibilityState === 'visible' && this.connection && !this.manuallyDisconnected && !this.sseActive) {
-        // 后台 tab 可能被浏览器节流导致 SSE 静默断开；只有当前无活跃 SSE 时才重新握手。
-        this.reconnectHandshake();
+      if (document.visibilityState === 'visible' && this.connection && !this.manuallyDisconnected) {
+        // 后台 tab 被浏览器节流时 setTimeout/watchdog 可能不触发，SSE 流被静默杀死
+        // 但 sseActive 仍为 true。回到前台时检查是否 stale（超过 90s 无数据），
+        // 如果是则主动重连；否则按原逻辑仅在 sseActive=false 时重连。
+        const now = Date.now();
+        const isStale = this.sseActive && this.lastSseEventAt > 0 && (now - this.lastSseEventAt) > 90_000;
+        if (!this.sseActive || isStale) {
+          if (isStale) {
+            console.warn(`[AcpClient] SSE stale detected on visibilitychange: last event ${Math.round((now - this.lastSseEventAt) / 1000)}s ago, forcing reconnect`);
+            this.abortCurrentSse();
+          }
+          this.reconnectHandshake();
+        }
       }
     };
     document.addEventListener('visibilitychange', this.visibilityHandler);

@@ -20,6 +20,7 @@ import { installProcessRuntimeGuards } from './core/RuntimeGuards.js';
 import { ConnectionManager, SseBridge, AcpHandler, StorageApi, FileChangesApi, WikiApi, ServerAuth } from './web-server/index.js';
 import { GitIntegrationApi } from './web-server/GitIntegrationApi.js';
 import { GitActivityBuffer } from './web-server/GitActivityBuffer.js';
+import { AgentActivityBuffer } from './web-server/AgentActivityBuffer.js';
 import { registerSessionRoutes } from './web-server/SessionRoutes.js';
 import { registerSettingsRoutes } from './web-server/SettingsRoutes.js';
 import { registerFileSystemRoutes } from './web-server/FileSystemRoutes.js';
@@ -41,6 +42,7 @@ import { registerWorkspaceRoutes } from './web-server/WorkspaceRoutes.js';
 import { registerLangfuseRoutes } from './web-server/LangfuseRoutes.js';
 import { initLangfuse, shutdownLangfuse, readLangfuseConfig, setLangfuseEmitter } from './core/LangfuseIntegration.js';
 import { onConfigReload } from './config.js';
+import { reconcileToolRegistryFromConfig } from './tools/index.js';
 import { registerAcpRoutes } from './web-server/AcpRoutes.js';
 import { registerTerminalRoutes } from './web-server/TerminalRoutes.js';
 import { registerScheduledTaskRoutes } from './web-server/ScheduledTaskRoutes.js';
@@ -187,6 +189,7 @@ export async function createServerWithDeps(
     messageBus?: ReturnType<typeof createMessageBus>;
   },
 ) {
+  const __t0 = process.hrtime.bigint();
   const eventEmitter = options?.emitter ?? defaultEmitter;
   const bus = options?.messageBus
     ?? (eventEmitter === defaultEmitter ? defaultMessageBus : createMessageBus(1000, eventEmitter));
@@ -222,6 +225,9 @@ export async function createServerWithDeps(
   const gitActivityBuffer = new GitActivityBuffer();
   gitActivityBuffer.start(eventEmitter);
   registerCleanup(() => gitActivityBuffer.stop(), 8);
+  const agentActivityBuffer = new AgentActivityBuffer();
+  agentActivityBuffer.start(eventEmitter);
+  registerCleanup(() => agentActivityBuffer.stop(), 8);
   const wikiApi = new WikiApi(eventEmitter, repos);
   const browserRuntime = new BrowserRuntime();
   const scheduledTaskManager = new ScheduledTaskManager(db, bus, eventEmitter, sessionManager);
@@ -263,7 +269,12 @@ export async function createServerWithDeps(
       }
     },
   });
-  resourceBudget.start();
+  // Deferred to post-listen: non-critical background service
+  setImmediate(() => {
+    try { resourceBudget.start(); } catch (err) {
+      console.error('[Server] ResourceBudget start failed:', err instanceof Error ? err.message : String(err));
+    }
+  });
   registerCleanup(() => {
     resourceBudget.stop();
   }, 8);
@@ -271,7 +282,12 @@ export async function createServerWithDeps(
   // 延迟 10s 异步检查 GitHub releases，发现新版本时通过 notification:new
   // 推送到 TUI / WebUI；每 24h 定期检查；不阻塞启动。
   const updateChecker = new UpdateChecker(eventEmitter, () => sessionManager.getActiveSessionIds());
-  updateChecker.start();
+  // Deferred to post-listen: already delays 10s internally before first check
+  setImmediate(() => {
+    try { updateChecker.start(); } catch (err) {
+      console.error('[Server] UpdateChecker start failed:', err instanceof Error ? err.message : String(err));
+    }
+  });
   registerCleanup(() => updateChecker.stop(), 8);
 
   /**
@@ -356,9 +372,39 @@ export async function createServerWithDeps(
   // 启动 SSE 事件桥接
   sseBridge.start();
 
-  // 启动 settings.json 热加载
-  startSettingsWatcher();
+  // 启动 settings.json 热加载（延后到 listen 后）
+  setImmediate(() => {
+    try { startSettingsWatcher(); } catch (err) {
+      console.error('[Server] SettingsWatcher start failed:', err instanceof Error ? err.message : String(err));
+    }
+  });
   registerCleanup(() => stopSettingsWatcher(), 7);
+  // settings.json 热加载后同步活跃 session 的 ToolRegistry：
+  // - 直接编辑 settings.tools.user_defined / disabled_names 不再需要重启
+  // - 不重建 registry，避免丢失 terminal/node/browser 等状态型工具实例
+  const disposeToolRegistryReload = onConfigReload(() => {
+    const changedNames = new Set<string>();
+    let reconciledSessions = 0;
+    for (const sessionId of sessionManager.getActiveSessionIds()) {
+      const registry = sessionManager.getSessionToolRegistry(sessionId);
+      if (!registry) continue;
+      try {
+        const result = reconcileToolRegistryFromConfig(registry);
+        if (!result.changed) continue;
+        reconciledSessions++;
+        for (const name of result.changedNames) changedNames.add(name);
+      } catch (error) {
+        coreLogger.warn(`[Tools] settings hot reload reconcile failed for session ${sessionId}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    if (changedNames.size > 0) {
+      for (const name of changedNames) {
+        try { eventEmitter.emit('tools:changed', { action: 'reload', name }); } catch { /* ignore listener failures */ }
+      }
+      coreLogger.info(`[Tools] settings hot reload reconciled ${changedNames.size} tool(s) across ${reconciledSessions} active session(s): ${Array.from(changedNames).join(', ')}`);
+    }
+  });
+  registerCleanup(() => disposeToolRegistryReload(), 7);
 
   // 初始化 Langfuse 可观测性集成（可选，默认关闭）
   try {
@@ -419,6 +465,7 @@ export async function createServerWithDeps(
   registerTerminalRoutes(fastify, { serverAuth, repos });
   gitIntegrationApi.registerRoutes(fastify, requireServerToken);
   gitActivityBuffer.registerRoutes(fastify, requireServerToken);
+  agentActivityBuffer.registerRoutes(fastify, requireServerToken);
   registerWorkbenchRoutes(fastify, { repos, sessionManager, requireServerToken, getActiveSessionId });
   registerWorktreeRoutes(fastify, { repos, requireServerToken });
   registerBrowserRoutes(fastify, { requireServerToken, browserRuntime });
@@ -545,17 +592,21 @@ export async function createServerWithDeps(
     });
   });
 
-  // 本地 LLM 网关：独立固定端口监听器（仅在 llm_gateway.enabled 时启动）。
-  // 与 Web 服务器解耦——地址取自 llm_gateway.host/port，不再随 Web 端口随机回退漂移。
-  // 三入口（startServer / daemon / TUI）都经此；复用逻辑保证仅首个进程绑定。
-  // 网关启动失败不阻断 Web UI——复用检测可能因 btime 漂移等环境因素误判，
-  // 此时 Web UI 仍应正常启动；LLM 调用经已存在的网关监听仍可工作。
+  // 本地 LLM 网关：进程绑定式随机端口监听器（仅在 llm_gateway.enabled 时启动）。
+  // 每个进程自己的网关随进程生灭——不再共享复用，消除僵尸进程死网关问题。
+  // 绑定后通过 setRuntimeGatewayEndpoint() 注入实际端口，resolveLocalLlmGateway() 读取。
   try {
     await startLocalLlmGatewayServer({ repos, emitter: eventEmitter, getActiveSessionId, createLlmGuard });
   } catch (err) {
     console.warn(
       `[Server] 本地 LLM 网关启动失败，Web UI 继续启动: ${err instanceof Error ? err.message : String(err)}`,
     );
+  }
+
+  const __tEnd = process.hrtime.bigint();
+  const __elapsedMs = Number(__tEnd - __t0) / 1e6;
+  if (__elapsedMs > 100) {
+    console.log(`[Server] createServerWithDeps took ${__elapsedMs.toFixed(0)}ms`);
   }
 
   return { fastify, token: serverAuth.token, scheduledTaskManager };
@@ -628,7 +679,9 @@ export function removePortFile(): void {
  * 启动服务器
  */
 export async function startServer() {
+  const __t0 = process.hrtime.bigint();
   const { fastify: server, token } = await createServer();
+  const __t1 = process.hrtime.bigint();
   const webHost = runtimeConfig.server.host;
   const webPort = runtimeConfig.server.port;
   const dbPath = runtimeConfig.paths.db_path;
@@ -660,6 +713,8 @@ export async function startServer() {
   writePortFile(actualPort, webHost);
   registerCleanup(() => removePortFile(), 2);
   registerCleanup(() => server.close(), 3);
+  const __t2 = process.hrtime.bigint();
+  console.log(`[Server] Startup: init=${(Number(__t1 - __t0) / 1e6) | 0}ms listen=${(Number(__t2 - __t1) / 1e6) | 0}ms total=${(Number(__t2 - __t0) / 1e6) | 0}ms`);
 
   // Watchdog heartbeat for EternalSupervisor
   const watchdogTimer = setInterval(() => writeWatchdog(), 10_000);

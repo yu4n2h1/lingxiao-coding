@@ -5,6 +5,7 @@
  * 参考 Python 版本的 LeaderAgent 实现
  */
 
+import { createHash } from 'node:crypto';
 import {
   contentToPlainText,
   isEmptyContent,
@@ -38,6 +39,7 @@ import {
   LEADER_PROBE_BACKOFF_MULTIPLIER,
   LEADER_PROBE_MAX_INTERVAL_SECONDS,
   LEADER_PROBE_SILENCE_SECONDS,
+  MAX_CONVERSATION_BYTES,
   MAX_CONVERSATION_MESSAGES,
 } from '../config.js';
 import { join } from 'path';
@@ -128,6 +130,7 @@ import { createEventStreamClient, type LlmRoundHooks } from './runtime/LlmRoundE
 import { ToolScheduler } from './runtime/ToolScheduler.js';
 import type { ToolResultContent } from './runtime/ToolResponseProcessor.js';
 import { startToolProgressHeartbeat } from './runtime/ToolProgressHeartbeat.js';
+import type { CapabilityIntentProfile } from '../contracts/types/Autonomy.js';
 import {
   LEADER_PARALLEL_SAFE_TOOLS,
   canBatchExecuteToolCalls as canBatchExecuteToolCallsFn,
@@ -918,6 +921,7 @@ export class LeaderAgent {
       contextManager: this.contextManager,
       llm: this.createLeaderEventStreamClient('Leader-DirectTools'),
       model: this.model,
+      getModel: () => this.model,
       workflowManager: this.workflowManager,
       workflowEngine: this.workflowEngine,
       scheduledTaskManager: this.scheduledTaskManager,
@@ -1334,8 +1338,17 @@ export class LeaderAgent {
     this.executionController.setExecutionRoute(decision);
   }
 
-  protected chooseExecutionRoute(): RouteDecision {
-    return this.executionController.chooseExecutionRoute();
+  protected chooseExecutionRoute(intentProfile?: CapabilityIntentProfile | null): RouteDecision {
+    return this.executionController.chooseExecutionRoute(intentProfile);
+  }
+
+  private beginUserTurn(): number {
+    this.turnCount++;
+    this.db.setSessionState(this.sessionId, SESSION_KEYS.CURRENT_USER_TURN_ID, this.turnCount);
+    this.db.deleteSessionState(this.sessionId, SESSION_KEYS.CAPABILITY_INTENT_PROFILE);
+    this.db.deleteSessionState(this.sessionId, SESSION_KEYS.CAPABILITY_INTENT_TURN_ID);
+    this.db.deleteSessionState(this.sessionId, SESSION_KEYS.AUTONOMY_DECISION_TRACE);
+    return this.turnCount;
   }
 
   setDelegateMode(reason: string): void {
@@ -1692,7 +1705,7 @@ export class LeaderAgent {
   public addMessage(msg: ChatMessage): void {
     ensureMessageTimestamp(msg);
     this.conversation.push(msg);
-    this.conversation = trimConversationBuffer(this.conversation, MAX_CONVERSATION_MESSAGES);
+    this.conversation = trimConversationBuffer(this.conversation, MAX_CONVERSATION_MESSAGES, MAX_CONVERSATION_BYTES);
   }
 
   /**
@@ -1733,15 +1746,32 @@ export class LeaderAgent {
    * the current mode immediately, while the historical conversation table
    * remains append-only.
    */
+  private hashContextContent(content: unknown): string {
+    return createHash('sha1').update(contentToPlainText(content)).digest('hex').slice(0, 16);
+  }
+
   protected syncSystemPromptForCurrentMode(): void {
     const prompt = this.getSystemPrompt();
     const firstSystemIndex = this.conversation.findIndex((message) => message.role === 'system');
     if (firstSystemIndex >= 0) {
       if (this.conversation[firstSystemIndex]?.content !== prompt) {
+        const previous = this.conversation[firstSystemIndex]?.content;
         this.conversation[firstSystemIndex] = {
           ...this.conversation[firstSystemIndex],
           content: prompt,
         };
+        this.emitter.emit('context:mutation', {
+          sessionId: this.sessionId,
+          source: 'leader_system_prompt_sync',
+          operation: 'replace',
+          slot: 'leader_primary_system',
+          oldHash: this.hashContextContent(previous),
+          newHash: this.hashContextContent(prompt),
+          oldLength: contentToPlainText(previous).length,
+          newLength: prompt.length,
+          changed: true,
+          reason: 'primary_system_prompt_changed',
+        });
       }
       return;
     }
@@ -1750,7 +1780,19 @@ export class LeaderAgent {
       content: prompt,
       timestamp: Date.now() / 1000,
     });
-    this.conversation = trimConversationBuffer(this.conversation, MAX_CONVERSATION_MESSAGES);
+    this.emitter.emit('context:mutation', {
+      sessionId: this.sessionId,
+      source: 'leader_system_prompt_sync',
+      operation: 'append',
+      slot: 'leader_primary_system',
+      oldHash: null,
+      newHash: this.hashContextContent(prompt),
+      oldLength: 0,
+      newLength: prompt.length,
+      changed: true,
+      reason: 'primary_system_prompt_inserted',
+    });
+    this.conversation = trimConversationBuffer(this.conversation, MAX_CONVERSATION_MESSAGES, MAX_CONVERSATION_BYTES);
   }
 
   /**
@@ -1771,9 +1813,29 @@ export class LeaderAgent {
    * 只改 this.conversation 内存视图，不落库（同 pruneStaleModeHints / syncSystemPromptForCurrentMode 契约）。
    */
   private upsertRuntimeSystemSlot(matcher: SystemSlotMatcher, content: string): boolean {
+    const slot = matcher.kind === 'manifestSlot' ? matcher.slot : matcher.prefix;
+    const before = this.conversation.find((message) => message.role === 'system' && (
+      matcher.kind === 'manifestSlot'
+        ? contentToPlainText(message.content).includes(`slot=${matcher.slot}`)
+        : contentToPlainText(message.content).trimStart().startsWith(matcher.prefix)
+    ));
     const result = upsertSystemSlot(this.conversation, matcher, content);
     if (result.messages !== this.conversation) {
-      this.conversation = trimConversationBuffer(result.messages, MAX_CONVERSATION_MESSAGES);
+      this.conversation = trimConversationBuffer(result.messages, MAX_CONVERSATION_MESSAGES, MAX_CONVERSATION_BYTES);
+    }
+    if (result.changed) {
+      this.emitter.emit('context:mutation', {
+        sessionId: this.sessionId,
+        source: 'leader_runtime_system_slot',
+        operation: before ? 'replace' : 'append',
+        slot,
+        oldHash: before ? this.hashContextContent(before.content) : null,
+        newHash: this.hashContextContent(content),
+        oldLength: before ? contentToPlainText(before.content).length : 0,
+        newLength: content.length,
+        changed: true,
+        reason: 'system_slot_upsert',
+      });
     }
     return result.changed;
   }
@@ -1907,7 +1969,7 @@ export class LeaderAgent {
   /**
    * 切换当前会话使用的模型（立即生效，下一轮 LLM 调用使用新模型）
    */
-  setModel(modelId: string): { ok: boolean; message: string } {
+  setModel(modelId: string, options?: { persistSessionState?: boolean }): { ok: boolean; message: string } {
     if (!modelId) {
       return { ok: false, message: 'modelId 不能为空' };
     }
@@ -1923,7 +1985,9 @@ export class LeaderAgent {
     }
     const prev = this.model;
     this.model = normalizedModelId;
-    void this.db.setSessionState(this.sessionId, SESSION_KEYS.CURRENT_MODEL, normalizedModelId);
+    if (options?.persistSessionState !== false) {
+      void this.db.setSessionState(this.sessionId, SESSION_KEYS.CURRENT_MODEL, normalizedModelId);
+    }
 
     // 同步更新 contextManager 的 context window 大小
     // 优先级：ModelManager 用户配置 > ModelsDevRegistry > 保持现有值
@@ -2572,9 +2636,10 @@ export class LeaderAgent {
           ? initialPrompt
           : contentToPlainText(initialPrompt);
         this.originalGoal = goalText?.trim() ? goalText.trim().slice(0, 500) : null;
+        this.beginUserTurn();
         // Orchestration 不再在用户消息进来时自动启动；Leader 在 leaderThinkAndAct 中
         // 通过任务图与节点元数据自行决定是否进入统一编排内核。
-        this.setExecutionRoute(this.chooseExecutionRoute());
+        this.setExecutionRoute(this.chooseExecutionRoute(null));
         const teamHint = this.getTeamModeHint();
         if (teamHint) {
           this.addMessage({ role: 'system', content: teamHint });
@@ -2594,7 +2659,6 @@ export class LeaderAgent {
           sessionId: this.sessionId,
           status: 'Thinking...',
         });
-        this.turnCount++;
         try {
           if (!this.fileChangesApi) {
             const { FileChangesApi } = await import('../web-server/FileChangesApi.js');
@@ -2780,8 +2844,9 @@ export class LeaderAgent {
         await this.db.setSessionState(this.sessionId, SESSION_KEYS.LEADER_WAITING_FOR_USER, 'false');
         await this.clearConsumedUserInputState();
         const msgContentInner = (msg.payload as MessageContent) ?? '';
+        this.beginUserTurn();
         // Orchestration 触发改由 Leader 在编排内核里通过任务图节点决定
-        this.setExecutionRoute(this.chooseExecutionRoute());
+        this.setExecutionRoute(this.chooseExecutionRoute(null));
         const teamHintInner = this.getTeamModeHint();
         if (teamHintInner) {
           this.addMessage({ role: 'system', content: teamHintInner });
@@ -2791,7 +2856,6 @@ export class LeaderAgent {
           role: 'user',
           content: msgContentInner,
         });
-        this.turnCount++;
         try {
           if (!this.fileChangesApi) {
             const { FileChangesApi } = await import('../web-server/FileChangesApi.js');
@@ -2837,15 +2901,15 @@ export class LeaderAgent {
       await this.db.setSessionState(this.sessionId, SESSION_KEYS.LEADER_WAITING_FOR_USER, 'false');
       await this.clearConsumedUserInputState();
       const msgContent = (msg.payload as MessageContent) ?? '';
+      this.beginUserTurn();
       // Orchestration 触发改由 Leader 在编排内核里通过任务图节点决定
-      this.setExecutionRoute(this.chooseExecutionRoute());
+      this.setExecutionRoute(this.chooseExecutionRoute(null));
       const teamHint = this.getTeamModeHint();
       if (teamHint) {
         this.addMessage({ role: 'system', content: teamHint });
       }
       this.addMessage({ role: 'user', content: msgContent });
       await this.db.saveConversationMessage(this.sessionId, { role: 'user', content: msgContent });
-      this.turnCount++;
       try {
         if (!this.fileChangesApi) {
           const { FileChangesApi } = await import('../web-server/FileChangesApi.js');
@@ -3272,7 +3336,7 @@ export class LeaderAgent {
           ...(combinedRecoveryReport ? [{ title: 'Worker Recovery Required', content: combinedRecoveryReport }] : []),
           {
             title: 'Leader Verification Directive',
-            content: `评估恢复事件并决定下一步。【硬性前提】对涉及 worker_recovery 的任务，决定重派/接管/终止前，必须先对目标 agent 调用 check_agent_progress 确认其实际运行态（running / 恢复中 / 已退出 / 恢复代数与 respawn 失败计数），禁止仅凭文件产物或本恢复报告文本猜测状态。worker_recovery 表示任务未完成，不得当作 completed；若 auto_retry_scheduled=true 且新 worker 仍在运行，等待并验收，不要重复 dispatch；若 llm_error_kind 为 request_timeout/network_error 等瞬时类，属 provider 抖动，倾向等待而非重派；仅当 check_agent_progress 显示确无进展/卡死/或自动重派失败，才显式重派、接管、阻塞或升级给用户。如本次任务产出了重要的架构决策、技术选型、用户偏好或关键发现，请调用 learn_soul 写入对应的项目级/用户级长期记忆。${dispatchDirective}`,
+            content: `评估恢复事件并决定下一步。【硬性前提】对涉及 worker_recovery 的任务，先用 list_runtime_agents 或当前 Leader Runtime State 确认目标 agent 是否仍存在、是否 active，以及 recoveryLineage / consecutiveRespawnFailures；只有目标 agent 在当前 runtime agents 中存在且仍 active 时，才调用 check_agent_progress 做深查。若恢复报告里的 agent 名已不在当前 runtime agents 中，禁止拿旧名反复调用 check_agent_progress；应改用 list_runtime_agents 返回的真实 agent 名、任务板状态和 auto_retry_scheduled 结果判断等待/接管/重派。worker_recovery 表示任务未完成，不得当作 completed；若 auto_retry_scheduled=true 且新 worker 仍在运行，等待并验收，不要重复 dispatch；若 llm_error_kind 为 request_timeout/network_error 等瞬时类，属 provider 抖动，倾向等待而非重派；仅当当前 active agent 的 check_agent_progress 显示确无进展/卡死，或 list_runtime_agents 显示自动重派失败/无 active worker，才显式重派、接管、阻塞或升级给用户。如本次任务产出了重要的架构决策、技术选型、用户偏好或关键发现，请调用 learn_soul 写入对应的项目级/用户级长期记忆。${dispatchDirective}`,
           },
         ],
       });
@@ -3717,9 +3781,23 @@ export class LeaderAgent {
     inProgress?: boolean;
     threshold?: number;
   }> {
+    const oldLength = this.conversation.length;
+    const oldHash = this.hashContextContent(this.conversation.map((message) => contentToPlainText(message.content)).join('\n'));
     this.contextManager.setMessages(this.conversation);
     const result = await this.contextManager.forceCompact();
     this.conversation = this.contextManager.getMessages();
+    const newHash = this.hashContextContent(this.conversation.map((message) => contentToPlainText(message.content)).join('\n'));
+    this.emitter.emit('context:mutation', {
+      sessionId: this.sessionId,
+      source: 'leader_compact_context',
+      operation: 'compact',
+      oldHash,
+      newHash,
+      oldLength,
+      newLength: this.conversation.length,
+      changed: oldHash !== newHash || oldLength !== this.conversation.length,
+      reason: result.compacted ? 'context_compacted' : 'compact_noop',
+    });
     return result;
   }
 

@@ -12,7 +12,7 @@ license: Proprietary. LICENSE.txt has complete terms
 |------|-------|
 | Read/analyze content | `python -m markitdown presentation.pptx` |
 | Edit or create from template | Read [editing.md](editing.md) |
-| Create from scratch | Read [pptxgenjs.md](pptxgenjs.md) |
+| Create from scratch | Prefer LingXiao `generate_pptx` (project-bundled `pptxgenjs`); use [pptxgenjs.md](pptxgenjs.md) only for standalone script patterns |
 
 ---
 
@@ -42,9 +42,11 @@ python scripts/office/unpack.py presentation.pptx unpacked/
 
 ## Creating from Scratch
 
-**Read [pptxgenjs.md](pptxgenjs.md) for full details.**
+Prefer LingXiao `generate_pptx` for new native editable PowerPoint decks. It uses the project-bundled `pptxgenjs` dependency, so do not ask the user to install a global package for normal LingXiao generation.
 
-Use when no template or reference presentation is available.
+Read [pptxgenjs.md](pptxgenjs.md) only when you need standalone JavaScript patterns outside the built-in tool, or when debugging a custom PPTX generation script.
+
+Use this route when no template or reference presentation is available. If the user explicitly requested PPTX/PowerPoint, do not silently substitute HTML/Slidev. HTML-exported PPTX is image-based and not text-editable.
 
 ---
 

@@ -248,8 +248,17 @@ export class ContextManager {
     }
 
     // 字节维度：未配置或未超网关上限则跳过
-    const bytesOverBudget = this.maxRequestBytes > 0
-      && calculateRequestBytes(this.messages) > calculateByteThreshold(this.maxRequestBytes);
+    // 安全阀：仅当 token 维度也已超过 proactive 阈值的 50% 时才因字节触发压缩。
+    // 否则大窗口模型（如 1M）在 token 远未到阈值时，仅因中文/代码内容字节密度高
+    // 就被过早压缩——token 才用了 14% 却因字节触网关而压缩。
+    const byteThreshold = this.maxRequestBytes > 0
+      ? calculateByteThreshold(this.maxRequestBytes)
+      : 0;
+    const currentBytes = byteThreshold > 0 ? calculateRequestBytes(this.messages) : 0;
+    const tokenNearThreshold = currentTokens > Math.floor(this.proactiveCompactThreshold * 0.5);
+    const bytesOverBudget = byteThreshold > 0
+      && currentBytes > byteThreshold
+      && tokenNearThreshold;
 
     // P1-1h: proactive compression at 70% of budget (before reaching the ~80% threshold).
     // Only triggers if tokens are above the proactive threshold but below the hard threshold,

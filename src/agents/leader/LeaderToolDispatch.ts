@@ -7,6 +7,8 @@ import type { ToolResultContent } from '../runtime/ToolResponseProcessor.js';
 import { executeToolCallsWithTruncationGuard } from '../runtime/ToolCallSafety.js';
 import { isStopFinishReason } from '../runtime/CompletionTerminationPolicy.js';
 import { FILE_MODIFYING_TOOLS } from '../runtime/parallelToolBatch.js';
+import { truncateAgentToolResult } from '../AgentRuntimeUtilities.js';
+import { config as runtimeConfig } from '../../config.js';
 import { registerLeaderFlush, unregisterLeaderFlush } from '../../core/RuntimeGuards.js';
 
 export type LeaderToolDispatchResult = { done: boolean; result?: string };
@@ -328,7 +330,11 @@ export function createLeaderToolScheduler(
         callId: toolCall.id,
       });
     },
-    transformToolResult: (_toolCall, rawResult) => rawResult,
+    transformToolResult: (toolCall, rawResult) => truncateAgentToolResult(
+      toolCall.function.name,
+      rawResult,
+      runtimeConfig.agents.tool_result_max_chars,
+    ),
     persistToolMessage: (message) => {
       options.addMessage(message);
       const conv = options.getConversation();

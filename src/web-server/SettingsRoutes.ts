@@ -190,7 +190,6 @@ const SETTINGS_MAP: Record<string, string> = {
   'sandboxAutoAllowBashIfSandboxed': 'security.auto_allow_bash_if_sandboxed',
   'dangerousCommandGuard': 'security.dangerous_command_guard',
   'blockPrivateNetwork': 'security.block_private_network',
-  'identityJudgeLlmEnabled': 'security.identity_judge_llm_enabled',
   // Security hardened mode（企业内网加固）
   'hardenedMode': 'security.hardened_mode',
   'envAllowlist': 'security.env_allowlist',
@@ -287,9 +286,8 @@ export function registerSettingsRoutes(
     data.mcpToolTimeoutMs = typeof data.mcpToolTimeoutMs === 'number' ? data.mcpToolTimeoutMs : 60000;
     data.toolExecutionTimeoutMs = typeof data.toolExecutionTimeoutMs === 'number' ? data.toolExecutionTimeoutMs : TOOLS.EXECUTION_TIMEOUT_MS;
     data.defaultUserAgent = DEFAULT_LINGXIAO_USER_AGENT;
-    data.permissionMode = typeof data.permissionMode === 'string' ? data.permissionMode : 'yolo';
+    data.permissionMode = typeof data.permissionMode === 'string' ? data.permissionMode : 'dev';
     data.sandboxAutoAllowBashIfSandboxed = data.sandboxAutoAllowBashIfSandboxed !== false;
-    data.identityJudgeLlmEnabled = data.identityJudgeLlmEnabled === true;
     data.deferToolLoading = !!data.deferToolLoading;
     data.ignoreGitIgnore = !!data.ignoreGitIgnore;
     data.hookOutputCollapsed = data.hookOutputCollapsed !== false;
@@ -780,6 +778,86 @@ export function registerSettingsRoutes(
       return reply.status(400).send({ error: toErrorMessage(e) });
     }
   });
+
+
+  // POST /api/v1/settings/test-llm — 用临时配置测试 LLM 连接（不保存）
+  // Onboarding 专用：用户输入 provider/apiKey/baseUrl/model 后即时验证连通性。
+  // 直接 fetch 调用 LLM API，不依赖 LLMClientManager / ModelManager（onboarding 阶段尚未保存配置）。
+  fastify.post('/api/v1/settings/test-llm', async (request, reply) => {
+    if (!requireServerToken(request, reply)) return;
+    const body = (request.body || {}) as {
+      provider?: string;
+      apiKey?: string;
+      baseUrl?: string;
+      model?: string;
+    };
+    const provider = body.provider?.trim();
+    const apiKey = body.apiKey?.trim();
+    const baseUrl = body.baseUrl?.trim();
+    const model = body.model?.trim();
+    if (!provider || !apiKey || !model) {
+      reply.status(400).send({ error: 'provider, apiKey, model are required' });
+      return;
+    }
+    try {
+      // 根据 provider 构建请求 URL 和 headers
+      const isAnthropic = provider === 'anthropic';
+      const defaultBaseUrl = isAnthropic ? 'https://api.anthropic.com' : 'https://api.openai.com/v1';
+      const effectiveBaseUrl = baseUrl || defaultBaseUrl;
+      const url = isAnthropic
+        ? `${effectiveBaseUrl.replace(/\/$/, '')}/v1/messages`
+        : `${effectiveBaseUrl.replace(/\/$/, '')}/chat/completions`;
+      const headers: Record<string, string> = isAnthropic
+        ? {
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+            'content-type': 'application/json',
+          }
+        : {
+            'authorization': `Bearer ${apiKey}`,
+            'content-type': 'application/json',
+          };
+      const payload = isAnthropic
+        ? {
+            model,
+            max_tokens: 16,
+            messages: [{ role: 'user', content: 'Hi' }],
+          }
+        : {
+            model,
+            max_tokens: 16,
+            messages: [{ role: 'user', content: 'Hi' }],
+          };
+      const llmRes = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (llmRes.ok) {
+        const data = await llmRes.json() as { content?: Array<{ text?: string }>; choices?: Array<{ message?: { content?: string } }> };
+        const preview = isAnthropic
+          ? (data.content?.[0]?.text || '').slice(0, 100)
+          : (data.choices?.[0]?.message?.content || '').slice(0, 100);
+        return { success: true, data: { message: 'Connection successful', responsePreview: preview } };
+      }
+      // 非 2xx：解析错误信息
+      const errText = await llmRes.text().catch(() => '');
+      let errMsg = `HTTP ${llmRes.status}`;
+      try {
+        const errJson = JSON.parse(errText);
+        errMsg = errJson?.error?.message || errJson?.error || errJson?.message || errMsg;
+      } catch {
+        if (errText) errMsg = errText.slice(0, 200);
+      }
+      reply.status(502).send({ error: `${errMsg} (status ${llmRes.status})` });
+    } catch (e: unknown) {
+      const msg = toErrorMessage(e);
+      request.log.warn({ err: e }, 'onboarding test-llm failed');
+      reply.status(502).send({ error: msg });
+    }
+  });
+
 
   // POST /api/v1/settings/model-provider — 添加模型提供者
   fastify.post('/api/v1/settings/model-provider', async (request, reply) => {

@@ -781,38 +781,38 @@ export class LeaderBlackboard {
     const { output: graphOutput } = parsed;
     const hasGraphOutput = graphOutput.newFacts.length > 0 || graphOutput.newIntents.length > 0 || (graphOutput.newContracts?.length ?? 0) > 0 || (graphOutput.newDesignDocs?.length ?? 0) > 0 || graphOutput.newEdges.length > 0;
 
-    // contract_compliance 写入黑板 contract 节点
+    // contract_compliance 追加到已有 contract 节点（不新建节点、不 supersede 真实契约）
     const compliance = contractCompliance ?? this.extractContractComplianceFromText(output);
     if (compliance && compliance.surface && compliance.status) {
       try {
         const surface = compliance.surface;
-        const evidenceText = compliance.evidence.length > 0
-          ? compliance.evidence.join(' | ')
-          : '(no evidence provided)';
+        const surfaceTag = `contract:${surface}`;
+        const complianceTags = [`compliance:${compliance.status}`, `task:${taskId}`];
+        const complianceEvidence = compliance.evidence.length > 0
+          ? compliance.evidence.map(e => ({ type: 'task_result' as const, ref: e }))
+          : [{ type: 'task_result' as const, ref: '(no evidence provided)' }];
         const deviationsText = compliance.deviations?.length
-          ? `\nDeviations: ${compliance.deviations.join(' | ')}`
+          ? ` Deviations: ${compliance.deviations.join(' | ')}`
           : '';
-        const content = [
-          `Task ${taskId} contract compliance report`,
-          `Surface: ${surface}`,
-          `Status: ${compliance.status}`,
-          `Evidence: ${evidenceText}`,
-          deviationsText,
-        ].filter(Boolean).join('\n');
 
-        this.blackboardGraph.addContract({
-          sessionId: this.sessionId,
-          title: `Contract Compliance: ${surface} (${taskId})`,
-          content,
-          tags: [
-            `contract:${surface}`,
-            `task:${taskId}`,
-            `compliance:${compliance.status}`,
-            'provenance:worker',
-          ],
-          createdBy: `worker-completion:${taskId}`,
-        });
-        leaderLogger.info(`[Blackboard] Worker ${taskId} contract_compliance 写入黑板 (surface=${surface}, status=${compliance.status})`);
+        // 找到同 surface 的活跃契约节点
+        const existingNodes = this.blackboardGraph.getNodesByTag(this.sessionId, surfaceTag)
+          .filter(node => node.kind === 'contract' && !node.supersededBy);
+
+        if (existingNodes.length > 0) {
+          // 有已有契约节点：追加 compliance tags + evidence，不新建节点、不 supersede
+          const target = existingNodes[existingNodes.length - 1];
+          const mergedTags = Array.from(new Set([...(target.tags ?? []), ...complianceTags]));
+          const mergedEvidence = [...(target.evidence ?? []), ...complianceEvidence];
+          this.blackboardGraph.updateNode(target.id, this.sessionId, {
+            tags: mergedTags,
+            evidence: mergedEvidence,
+          });
+          leaderLogger.info(`[Blackboard] Worker ${taskId} contract_compliance 追加到已有节点 ${target.id} (surface=${surface}, status=${compliance.status}${deviationsText})`);
+        } else {
+          // 无已有契约节点：compliance 仅记录日志，不创建 contract 节点（避免 stub 覆写）
+          leaderLogger.info(`[Blackboard] Worker ${taskId} contract_compliance 无已有契约节点可追加 (surface=${surface}, status=${compliance.status}${deviationsText})`);
+        }
       } catch (err) {
         leaderLogger.warn(`[Blackboard] contract_compliance 写入失败: ${err instanceof Error ? err.message : String(err)}`);
       }

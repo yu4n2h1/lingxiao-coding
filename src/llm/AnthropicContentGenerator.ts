@@ -859,10 +859,33 @@ export class AnthropicContentGenerator implements ContentGenerator {
       }
     }
 
-    // cache_control 策略
+    // cache_control 策略：优先把断点放在最后一个稳定 system block。
+    // runtime/context manifest、memory、blackboard、mode hint 等 system 块会频繁变化，
+    // 如果盲目给最后一个 system block 打 cache_control，会把 volatile 内容纳入缓存前缀，
+    // 造成频繁 cache miss。没有稳定块时回退到历史行为。
     if (systemBlocks.length > 0) {
-      systemBlocks[systemBlocks.length - 1] = {
-        ...systemBlocks[systemBlocks.length - 1],
+      const isVolatileSystemBlock = (block: TextBlockParam): boolean => {
+        const text = typeof block.text === 'string' ? block.text : '';
+        return text.includes('slot=leader_runtime')
+          || text.includes('slot=leader_memory')
+          || text.includes('slot=leader_init')
+          || text.includes('slot=worker_runtime')
+          || text.includes('slot=worker_memory')
+          || text.trimStart().startsWith('## 黑板图分析（自动注入')
+          || text.includes('[Solo 模式]')
+          || text.includes('[Team 模式]')
+          || text.includes('[Execution preference]')
+          || text.includes('[执行偏好]');
+      };
+      let cacheSystemIndex = systemBlocks.length - 1;
+      for (let i = systemBlocks.length - 1; i >= 0; i -= 1) {
+        if (!isVolatileSystemBlock(systemBlocks[i])) {
+          cacheSystemIndex = i;
+          break;
+        }
+      }
+      systemBlocks[cacheSystemIndex] = {
+        ...systemBlocks[cacheSystemIndex],
         cache_control: CACHE_CONTROL_EPHEMERAL,
       };
     }

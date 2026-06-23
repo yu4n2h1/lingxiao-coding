@@ -271,7 +271,9 @@ const AgentsGroupSchema = z.object({
   permission_timeout_ms: z.number().default(D.AGENT.PERMISSION_TIMEOUT_MS),
   tool_result_max_chars: z.number().default(D.AGENT.TOOL_RESULT_MAX_CHARS),
   max_conversation_messages: z.number().default(D.AGENT.MAX_CONVERSATION_MESSAGES),
+  max_conversation_bytes: z.number().int().positive().default(D.AGENT.MAX_CONVERSATION_BYTES),
   max_agent_messages: z.number().default(D.AGENT.MAX_AGENT_MESSAGES),
+  max_agent_messages_bytes: z.number().int().positive().default(D.AGENT.MAX_AGENT_MESSAGES_BYTES),
   max_continuation_depth: z.number().default(D.AGENT.MAX_CONTINUATION_DEPTH),
   worker_completion_judge_enabled: z.boolean().default(false),
   external_agents_enabled: z.boolean().default(D.AGENT.EXTERNAL_AGENTS_ENABLED),
@@ -620,7 +622,7 @@ const NetworkGroupSchema = z.object({
 });
 
 const SecurityGroupSchema = z.object({
-  permission_mode: z.enum(['strict', 'dev', 'networked', 'yolo']).default('yolo'),
+  permission_mode: z.enum(['strict', 'dev', 'networked', 'yolo']).default('dev'),
   auto_allow_bash_if_sandboxed: z.boolean().default(true),
   dangerous_command_guard: z.boolean().default(false),
   block_private_network: z.boolean().default(false),
@@ -628,7 +630,6 @@ const SecurityGroupSchema = z.object({
    * 身份/系统提示探测的 LLM 二次判定。默认关闭，避免每次模糊安全判定额外消耗
    * 一次模型请求；关闭时仅使用硬规则拦截明确的系统提示/隐藏指令探测。
    */
-  identity_judge_llm_enabled: z.boolean().default(false),
   /**
    * 企业内网加固模式总开关（默认 false，现状零改动）。
    * 开启后一键收紧子进程 env 透传、沙箱绑定、SSRF/私网防护、危险命令守卫、
@@ -729,7 +730,7 @@ const UiGroupSchema = z.object({
 const AdvancedGroupSchema = z.object({
   cleanup_period_days: z.number().default(30),
   image_history_retain_rounds: z.number().min(1).default(2),
-  defer_tool_loading: z.boolean().default(false),
+  defer_tool_loading: z.boolean().default(true),
   ignore_gitignore: z.boolean().default(false),
   hook_output_collapsed: z.boolean().default(true),
   env: z.record(z.string(), z.string()).default({}),
@@ -738,6 +739,7 @@ const AdvancedGroupSchema = z.object({
 const MessageBusGroupSchema = z.object({
   warning_threshold: z.number().default(D.MESSAGE_BUS.WARNING_THRESHOLD),
   critical_threshold: z.number().default(D.MESSAGE_BUS.CRITICAL_THRESHOLD),
+  max_history_bytes: z.number().int().positive().default(D.MESSAGE_BUS.MAX_HISTORY_BYTES),
 });
 
 const LangfuseConfigSchema = z.object({
@@ -817,6 +819,7 @@ const BlackboardGroupSchema = z.object({
   enabled: z.boolean().default(D.BLACKBOARD.ENABLED),
   max_nodes: z.number().int().positive().default(D.BLACKBOARD.MAX_GRAPH_NODES),
   max_edges: z.number().int().positive().default(D.BLACKBOARD.MAX_GRAPH_EDGES),
+  max_node_content_chars: z.number().int().positive().default(D.BLACKBOARD.MAX_NODE_CONTENT_CHARS),
 });
 
 /**
@@ -1013,7 +1016,7 @@ export const ConfigSchema = z.preprocess(withDefaultConfigGroups, z.object({
   advanced: AdvancedGroupSchema.default({
     cleanup_period_days: 30,
     image_history_retain_rounds: 2,
-    defer_tool_loading: false,
+    defer_tool_loading: true,
     ignore_gitignore: false,
     hook_output_collapsed: true,
     env: {},
@@ -1041,6 +1044,8 @@ const ENV_OVERRIDE_MAP: EnvMapping[] = [
   { env: 'LINGXIAO_MAX_CONCURRENT_AGENTS', path: 'agents.max_concurrent', type: 'number' },
   { env: 'LINGXIAO_AGENT_MAX_ITERATIONS', path: 'agents.max_iterations', type: 'number' },
   { env: 'LINGXIAO_AGENT_MAX_RUNTIME_MINUTES', path: 'agents.max_runtime_minutes', type: 'number' },
+  { env: 'LINGXIAO_MAX_CONVERSATION_BYTES', path: 'agents.max_conversation_bytes', type: 'number' },
+  { env: 'LINGXIAO_MAX_AGENT_MESSAGES_BYTES', path: 'agents.max_agent_messages_bytes', type: 'number' },
   { env: 'LINGXIAO_WORKER_COMPLETION_JUDGE', path: 'agents.worker_completion_judge_enabled', type: 'boolean' },
   { env: 'LINGXIAO_VERIFICATION_COMPLETION_GATE', path: 'verification.completion_gate_enabled', type: 'boolean' },
   { env: 'LINGXIAO_VERIFICATION_TYPECHECK', path: 'verification.typecheck', type: 'boolean' },
@@ -1071,11 +1076,13 @@ const ENV_OVERRIDE_MAP: EnvMapping[] = [
   { env: 'LINGXIAO_WEB_PORT', path: 'server.port', type: 'number' },
   { env: 'LINGXIAO_WEB_HOST', path: 'server.host', type: 'string' },
   { env: 'LINGXIAO_BLACKBOARD', path: 'blackboard.enabled', type: 'boolean' },
+  { env: 'LINGXIAO_BLACKBOARD_MAX_NODES', path: 'blackboard.max_nodes', type: 'number' },
+  { env: 'LINGXIAO_BLACKBOARD_MAX_EDGES', path: 'blackboard.max_edges', type: 'number' },
+  { env: 'LINGXIAO_BLACKBOARD_MAX_NODE_CONTENT_CHARS', path: 'blackboard.max_node_content_chars', type: 'number' },
   { env: 'LINGXIAO_PROXY_URL', path: 'network.proxy.url', type: 'string' },
   { env: 'LINGXIAO_PROXY_LLM', path: 'network.proxy.llm_enabled', type: 'boolean' },
   { env: 'LINGXIAO_PROXY_TOOLS', path: 'network.proxy.tools_enabled', type: 'boolean' },
   { env: 'LINGXIAO_USER_AGENT', path: 'network.user_agent', type: 'string' },
-  { env: 'LINGXIAO_IDENTITY_JUDGE_LLM', path: 'security.identity_judge_llm_enabled', type: 'boolean' },
   // 企业部署：运维可经 env 单向强制开启加固模式（不能经 Web UI 关闭，锁定逻辑见 HardeningPolicy）
   { env: 'LINGXIAO_HARDENED_MODE', path: 'security.hardened_mode', type: 'boolean' },
 ];
@@ -1582,7 +1589,9 @@ export let PLAN_REVIEW_ENABLED = config.leader.plan_review_enabled;
 export let ENABLE_STREAMING = config.llm.enable_streaming;
 export let ENABLE_THINKING_INSTRUCTION = config.llm.enable_thinking_instruction;
 export let MAX_CONVERSATION_MESSAGES = config.agents.max_conversation_messages;
+export let MAX_CONVERSATION_BYTES = config.agents.max_conversation_bytes;
 export let MAX_AGENT_MESSAGES = config.agents.max_agent_messages;
+export let MAX_AGENT_MESSAGES_BYTES = config.agents.max_agent_messages_bytes;
 export let HEALTH_POLL_INTERVAL_SECONDS = config.health.poll_interval_seconds;
 export let HEALTH_STALL_THRESHOLD_SECONDS = config.health.stall_threshold_seconds;
 export let HEALTH_STUCK_THRESHOLD_SECONDS = config.health.stuck_threshold_seconds;
@@ -1611,7 +1620,11 @@ export function syncDerivedConstants(): void {
   ENABLE_STREAMING = config.llm.enable_streaming;
   ENABLE_THINKING_INSTRUCTION = config.llm.enable_thinking_instruction;
   MAX_CONVERSATION_MESSAGES = config.agents.max_conversation_messages;
+  MAX_CONVERSATION_BYTES = config.agents.max_conversation_bytes;
   MAX_AGENT_MESSAGES = config.agents.max_agent_messages;
+  MAX_AGENT_MESSAGES_BYTES = config.agents.max_agent_messages_bytes;
+  // AGENT_TOOL_RESULT_MAX_CHARS 不需要 syncDerivedConstants —— BaseAgentRuntime 直接读 runtimeConfig.agents.tool_result_max_chars，
+  // 配置热加载后 runtimeConfig 对象原地更新，下一轮工具调用自动生效。
   HEALTH_POLL_INTERVAL_SECONDS = config.health.poll_interval_seconds;
   HEALTH_STALL_THRESHOLD_SECONDS = config.health.stall_threshold_seconds;
   HEALTH_STUCK_THRESHOLD_SECONDS = config.health.stuck_threshold_seconds;

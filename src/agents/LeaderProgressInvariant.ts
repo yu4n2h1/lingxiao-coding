@@ -286,7 +286,7 @@ export class LeaderProgressInvariant {
           '建议操作：',
           '- tool_stalled: 先使用 check_agent_progress 确认当前工具/日志，再优先 nudge_agent 或 retry_agent_llm',
           '- idle_no_progress: 使用 check_agent_progress 确认状态；不能只看任务板或时间判断',
-          '- heartbeat_lost: 先使用 check_agent_progress 确认心跳/最近进展；只有确认崩溃或不可恢复后才考虑 terminate_agent 并重新派发',
+          '- heartbeat_lost: 使用 check_agent_progress 确认心跳/最近进展；如确认崩溃或不可恢复，可 terminate_agent 并重新派发',
         ].join('\n');
         void this.addAndPersistMessage({ role: 'system', content: msg });
         this.emitter.emit('leader:watchdog_alert', {

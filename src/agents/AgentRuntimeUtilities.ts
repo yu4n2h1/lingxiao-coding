@@ -1,6 +1,6 @@
 import { thinkingBlocksToText, type ChatMessage, type ChatResponse } from '../llm/types.js';
 import { estimateTokens } from '../llm/token_counter.js';
-import type { AgentTask } from '../types/canonical.js';
+import type { AgentTask, TokenUsageView } from '../types/canonical.js';
 import type { ToolResultContent } from './runtime/ToolResponseProcessor.js';
 
 const CENTER_PRESERVED_TOOL_RESULTS = new Set<string>(['file_read', 'code_search']);
@@ -9,7 +9,7 @@ const TAIL_PRESERVED_TOOL_RESULTS = new Set<string>(['shell', 'python_exec']);
 export interface AgentTokenUsageTracker {
   addUsage(
     agentId: string,
-    usage: { prompt: number; completion: number; total: number; cache_read?: number; cache_creation?: number },
+    usage: TokenUsageView,
     modelName?: string,
   ): void;
 }
@@ -66,6 +66,8 @@ export function recordAgentTokenUsage(
       total: response.usage!.total_tokens,
       cache_read: response.usage!.cache_read_input_tokens,
       cache_creation: response.usage!.cache_creation_input_tokens,
+      reasoning: response.usage!.reasoning_tokens,
+      credit: response.usage!.credit,
     }, model);
     return;
   }

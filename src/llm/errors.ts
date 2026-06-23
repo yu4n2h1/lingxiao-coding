@@ -413,6 +413,15 @@ const MALFORMED_TOOL_ARGS_TEXT_PATTERNS = [
   'could not parse tool call arguments',
   'tool call arguments are not valid',
   'invalid tool call arguments',
+  // GLM/MiniMax 等 provider 的工具调用响应格式校验失败：
+  // 400 + "tool call result does not follow tool call (2013)"。
+  // 与 content_empty 共用 2013 但语义完全不同——前者是 client 侧消息序列污染
+  // （上一轮 tool_result 与本轮 tool_call id 不匹配 / role 错位），重试同上下文必死，
+  // 必须 fast-fail 走 compact 路径。empty-content-text 的 `(2013)` 模糊匹配会把它
+  // 误判成"内容为空可重试"导致无脑重试烧光预算。靠本规则优先匹配 + parse_error
+  // (retryable=false) 阻断。
+  'tool call result does not follow tool call',
+  'tool_call_result',
 ] as const;
 
 const INVALID_BODY_TEXT_PATTERNS = [

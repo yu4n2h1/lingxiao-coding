@@ -11,7 +11,7 @@ import { SidebarVersionBadge } from './sidebar/SidebarVersionBadge';
 import { BetaBadge } from './sidebar/BetaBadge';
 import {
   MessageCircle, Server, ListTodo, Terminal, LayoutDashboard,
-  FileCode, FileEdit, Puzzle, BarChart3, Activity, Cpu, ScrollText,
+  FileCode, FileEdit, Puzzle, BarChart3, Activity, Cpu,
   Settings, Keyboard, BookOpen, ChevronLeft, ChevronRight, Sun, Moon,
   Monitor, AlertCircle, Languages, Plus, RefreshCw, BookMarked, GitBranch,
   Network, GalleryVerticalEnd, Users, Palette, Brain, LayoutGrid,
@@ -44,6 +44,7 @@ const workspaceNav: NavItem[] = [
   { view: 'changes', icon: <FileEdit size={16} />, labelKey: 'sidebar.changes' },
   { view: 'git', icon: <GitBranch size={16} />, labelKey: 'sidebar.git' },
   { view: 'git-activity', icon: <GitCommitHorizontal size={16} />, labelKey: 'sidebar.gitActivity', isBeta: true },
+  { view: 'agent-activity', icon: <Activity size={16} />, labelKey: 'sidebar.agentActivity' },
   { view: 'wiki', icon: <BookMarked size={16} />, labelKey: 'sidebar.wiki' },
   { view: 'memory', icon: <Brain size={16} />, labelKey: 'sidebar.memory' },
   { view: 'plugins', icon: <Puzzle size={16} />, labelKey: 'sidebar.plugins' },
@@ -55,7 +56,6 @@ const observabilityNav: NavItem[] = [
   { view: 'traces', icon: <Activity size={16} />, labelKey: 'sidebar.traces' },
   { view: 'team', icon: <Users size={16} />, labelKey: 'sidebar.team' },
   { view: 'metrics', icon: <Cpu size={16} />, labelKey: 'sidebar.metrics' },
-  { view: 'logs', icon: <ScrollText size={16} />, labelKey: 'sidebar.logs' },
   { view: 'langfuse', icon: <Radar size={16} />, labelKey: 'sidebar.langfuse' },
 ];
 

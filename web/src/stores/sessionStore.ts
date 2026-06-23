@@ -41,6 +41,7 @@ import { usePermissionStore } from './permissionStore';
 import { useBlackboardStore } from './blackboardStore';
 import { useGitStore } from './gitStore';
 import { useGitActivityStore } from './gitActivityStore';
+import { useAgentActivityStore } from './agentActivityStore';
 import {
   appendAgentTextSegment,
   appendAgentThinkingSegment,
@@ -156,7 +157,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   isLoadingHistory: false,
   streamingLastActivityAt: Date.now(),
   streamingWatchdogInterval: null,
-  tokenUsage: { prompt: 0, completion: 0, total: 0, cache_read: 0, cache_creation: 0 },
+  tokenUsage: { prompt: 0, completion: 0, total: 0, cache_read: 0, cache_creation: 0, reasoning: 0, credit: 0 },
   lastCompressedAt: null,
   compactingProgress: null,
   contextRuntimeState: null,
@@ -544,6 +545,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           useGitActivityStore.getState().setEvents([]);
         }
       });
+      fetch(`/api/v1/agent/activity/${encodeURIComponent(sessionId)}`, {
+        headers: { 'x-lingxiao-token': getServerToken() },
+      }).then(res => res.ok ? res.json() : null).then(data => {
+        if (connectingSessionId !== sessionId) return;
+        if (data?.data && Array.isArray(data.data)) {
+          useAgentActivityStore.getState().setEvents(data.data);
+        } else {
+          useAgentActivityStore.getState().setEvents([]);
+        }
+      }).catch(() => {
+        // Fetch failed — clear to avoid showing stale events from previous session
+        if (connectingSessionId === sessionId) {
+          useAgentActivityStore.getState().setEvents([]);
+        }
+      });
+
       await acpClient.connect(sessionId);
       if (connectingSessionId !== sessionId) { await acpClient.disconnect(); return; }
       try {

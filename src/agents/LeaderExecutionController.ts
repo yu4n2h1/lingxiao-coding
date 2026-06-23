@@ -14,6 +14,7 @@ import { SESSION_KEYS } from '../core/SessionStateKeys.js';
 import { parseBlueprint, isBlueprintActive } from '../core/ProjectBlueprint.js';
 import { filterLeaderTools } from './leader/LeaderToolGates.js';
 import { resolveModeRuntimeProjection, resolveEffectiveRoutePreference } from '../core/ModeRuntimeProjection.js';
+import type { CapabilityIntentProfile } from '../contracts/types/Autonomy.js';
 
 export type LeaderExecutionMode = 'direct' | 'hybrid' | 'delegate';
 
@@ -102,15 +103,27 @@ export class LeaderExecutionController {
     this.workflowMode = this.db.getSessionState(this.sessionId, SESSION_KEYS.WORKFLOW_MODE_ACTIVE) === 'true';
   }
 
+  private shouldExposeRecordCapabilityIntentTool(): boolean {
+    const currentRaw = this.db.getSessionState(this.sessionId, SESSION_KEYS.CURRENT_USER_TURN_ID);
+    const recordedRaw = this.db.getSessionState(this.sessionId, SESSION_KEYS.CAPABILITY_INTENT_TURN_ID);
+    const currentTurnId = typeof currentRaw === 'number' ? currentRaw : typeof currentRaw === 'string' ? Number(currentRaw) : NaN;
+    const recordedTurnId = typeof recordedRaw === 'number' ? recordedRaw : typeof recordedRaw === 'string' ? Number(recordedRaw) : NaN;
+    if (!Number.isFinite(currentTurnId) || currentTurnId <= 0) return true;
+    return !Number.isFinite(recordedTurnId) || Math.trunc(recordedTurnId) !== Math.trunc(currentTurnId);
+  }
+
   getActiveToolDefinitions(): ToolDefinition[] {
     const directDefinitions = this.directToolsExecutor.getDefinitions();
+    const metaTools = this.shouldExposeRecordCapabilityIntentTool()
+      ? LEADER_META_TOOLS
+      : LEADER_META_TOOLS.filter((tool) => tool.function.name !== 'record_capability_intent');
     const modes = resolveModeRuntimeProjection({
       sessionId: this.sessionId,
       db: this.db,
       blackboardAvailable: this.getBlackboardEnabled ? this.getBlackboardEnabled() : false,
     });
     return filterLeaderTools({
-      candidates: [...LEADER_META_TOOLS, ...directDefinitions],
+      candidates: [...metaTools, ...directDefinitions],
       bughuntTools: BUGHUNT_TOOLS,
       officeToolNames: OFFICE_TOOL_NAMES,
       workflowToolNames: WORKFLOW_TOOL_NAMES,
@@ -188,7 +201,27 @@ export class LeaderExecutionController {
     }
   }
 
-  chooseExecutionRoute(): RouteDecision {
+  /**
+   * Pick the execution route for the next round.
+   *
+   * T-11: an optional `userIntent` signal from `IntentClassifier` lets us
+   * downgrade auto-routing when the user is clearly asking a read-only or
+   * design-only question. Conservative policy:
+   *   - `userIntent = 'diagnostic'` AND no explicit user route preference
+   *     AND no blueprint AND no running agents → pick `direct` so the Leader
+   *     handles the read-only request itself, instead of falling through to
+   *     `hybrid` (which historically allowed the leader to escalate to
+   *     worker dispatch on benign "梳理 / 看看" turns — see T-7 evidence).
+   *   - `userIntent = 'diagnostic'` AND user route preference is 'delegate'
+   *     → still respect the explicit user override; the user's choice wins
+   *     over the intent downgrade.
+   *   - any other intent → existing routing logic unchanged.
+   *
+   * The classifier is *advisory*: the trigger enum below does not gain a new
+   * variant — we keep using the existing triggers and put the rationale in
+   * `reason`. This preserves the audit shape T-7 verified.
+   */
+  chooseExecutionRoute(intentProfile?: CapabilityIntentProfile | null): RouteDecision {
     // 确定性工作快照（来自真实信号源：board 计数 / token 总量 / running 布尔）
     const dispatchableCount = this.getBoard().getDispatchable().length;
     const runningAgentsCount = this.hasRunningAgents() ? 1 : 0;
@@ -240,6 +273,29 @@ export class LeaderExecutionController {
         mode: 'delegate',
         reason: '当前会话有未完成的项目蓝图(复杂项目),Leader 优先委派:用 create_task+dispatch 推进实现,而非自己干大型实现。',
         trigger: 'project_blueprint_active',
+        workSnapshot,
+      };
+    }
+
+    // T-11 conservative downgrade: a clearly diagnostic request (read-only /
+    // "what's the current state?" / "explain") with no explicit user route
+    // preference and no project blueprint should not auto-escalate. Send it
+    // to the Leader as a direct answer rather than letting it fall through
+    // to hybrid (which historically let "梳理 / 看看" prompts promote to
+    // S2/S3 worker dispatch — T-7). Explicit user override (direct/delegate)
+    // is consumed above; blueprint promotion is consumed below; this is the
+    // last branch before default.
+    const readOnlyProfile = intentProfile?.scope.kind === 'read_only'
+      || Boolean(intentProfile && !intentProfile.grants.some((grant) => grant !== 'read'));
+    if (
+      readOnlyProfile &&
+      dispatchableCount === 0 &&
+      sessionTotalTokens <= 120_000
+    ) {
+      return {
+        mode: 'direct',
+        reason: 'capability profile 为只读/分析范围，Leader 直接给出回答，避免无依据升级到 worker 派发。',
+        trigger: 'default_autonomous',
         workSnapshot,
       };
     }

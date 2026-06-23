@@ -21,11 +21,59 @@ interface PermissionState {
   errors: Record<string, string>;
   // 历史记录保存后端协议原值，避免 Web 本地再造 denied/rejected 两套拒绝状态。
   history: Array<PermissionRequest & { decision: 'approved' | 'rejected' | 'allowAll' }>;
-  addRequest: (req: PermissionRequest) => void;
+  addRequest: (req: unknown) => void;
   clearError: (requestId: string) => void;
   approve: (requestId: string) => Promise<void>;
   deny: (requestId: string) => Promise<void>;
   allowAll: (requestId: string) => Promise<void>;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function stringValue(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function stringArrayValue(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const values = value.map(String).map((item) => item.trim()).filter(Boolean);
+  return values.length > 0 ? values : undefined;
+}
+
+function normalizePermissionRequest(value: unknown): PermissionRequest | null {
+  const record = asRecord(value);
+  if (!record) return null;
+  const requestId = stringValue(record.requestId)
+    ?? stringValue(record.request_id)
+    ?? stringValue(record.toolCallId)
+    ?? stringValue(record.id);
+  const toolName = stringValue(record.toolName)
+    ?? stringValue(record.tool_name)
+    ?? stringValue(record.tool)
+    ?? 'unknown';
+  if (!requestId) return null;
+  const timestamp = typeof record.timestamp === 'number' && Number.isFinite(record.timestamp)
+    ? record.timestamp
+    : Date.now();
+  return {
+    requestId,
+    sessionId: stringValue(record.sessionId) ?? stringValue(record.session_id) ?? '',
+    source: record.source === 'worker' ? 'worker' : 'leader',
+    toolName,
+    reason: stringValue(record.reason) ?? '',
+    requestedMode: stringValue(record.requestedMode) ?? stringValue(record.requested_mode) ?? stringValue(record.mode),
+    requestedHosts: stringArrayValue(record.requestedHosts) ?? stringArrayValue(record.requested_hosts),
+    workerName: stringValue(record.workerName) ?? stringValue(record.worker_name),
+    autoApproved: typeof record.autoApproved === 'boolean' ? record.autoApproved : undefined,
+    bypass: typeof record.bypass === 'boolean' ? record.bypass : undefined,
+    timestamp,
+  };
 }
 
 function withoutKey<T>(record: Record<string, T>, key: string): Record<string, T> {
@@ -61,10 +109,14 @@ export const usePermissionStore = create<PermissionState>((set, get) => ({
   errors: {},
   history: [],
 
-  addRequest: (req) => set((s) => ({
-    pendingRequests: [...s.pendingRequests.filter(r => r.requestId !== req.requestId), req],
-    errors: withoutKey(s.errors, req.requestId),
-  })),
+  addRequest: (req) => {
+    const normalized = normalizePermissionRequest(req);
+    if (!normalized) return;
+    set((s) => ({
+      pendingRequests: [...s.pendingRequests.filter(r => r.requestId !== normalized.requestId), normalized],
+      errors: withoutKey(s.errors, normalized.requestId),
+    }));
+  },
 
   clearError: (requestId) => set((s) => ({
     errors: withoutKey(s.errors, requestId),
@@ -77,7 +129,7 @@ export const usePermissionStore = create<PermissionState>((set, get) => ({
         errors: withoutKey(s.errors, requestId),
       }));
       await acpClient.sendJsonRpc('_lingxiao.ai/resolvePermission', {
-        toolCallId: requestId,
+        requestId,
         decision: 'approved',
       });
       const req = get().pendingRequests.find(r => r.requestId === requestId);
@@ -102,7 +154,7 @@ export const usePermissionStore = create<PermissionState>((set, get) => ({
         errors: withoutKey(s.errors, requestId),
       }));
       await acpClient.sendJsonRpc('_lingxiao.ai/resolvePermission', {
-        toolCallId: requestId,
+        requestId,
         decision: 'rejected',
       });
       const req = get().pendingRequests.find(r => r.requestId === requestId);
@@ -127,7 +179,7 @@ export const usePermissionStore = create<PermissionState>((set, get) => ({
         errors: withoutKey(s.errors, requestId),
       }));
       await acpClient.sendJsonRpc('_lingxiao.ai/resolvePermission', {
-        toolCallId: requestId,
+        requestId,
         decision: 'allowAll',
       });
       const req = get().pendingRequests.find(r => r.requestId === requestId);

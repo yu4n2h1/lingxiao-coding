@@ -9,6 +9,7 @@ import { auditOfficeToolExecution } from './implementations/office/OfficeAuditLo
 import { auditModeEvent } from '../core/ModeAudit.js';
 import { isOfficeToolName } from './officeToolContract.js';
 import { config as runtimeConfig } from '../config.js';
+import { getToolFailureLoopGuard } from '../agents/runtime/ToolFailureLoopGuard.js';
 import {
   evaluateToolPermission,
   getToolPermissionContextFromToolContext,
@@ -108,6 +109,28 @@ function formatToolTimeoutError(name: string, timeoutMs: number): string {
 
 function formatToolAbortedError(name: string): string {
   return `TOOL_ABORTED: 工具 "${name}" 已被中止。`;
+}
+
+/**
+ * 从 ToolResult.error 中提取 LLM_RECOVERY.code，与 createToolError 的输出对齐。
+ * 格式: `${message}\n\nLLM_RECOVERY=${JSON.stringify({code, message, ...})}`
+ */
+function extractErrorCodeFromText(errorText: string): string {
+  if (!errorText) return '';
+  const marker = 'LLM_RECOVERY=';
+  const idx = errorText.lastIndexOf(marker);
+  if (idx < 0) {
+    const firstLine = errorText.split('\n')[0] || '';
+    const colonIdx = firstLine.indexOf(':');
+    return colonIdx > 0 ? firstLine.slice(0, colonIdx).trim() : firstLine.trim();
+  }
+  const jsonText = errorText.slice(idx + marker.length).trim();
+  try {
+    const parsed = JSON.parse(jsonText) as { code?: unknown };
+    return typeof parsed?.code === 'string' ? parsed.code : '';
+  } catch {
+    return '';
+  }
 }
 
 async function executeToolWithTimeout(
@@ -376,6 +399,65 @@ function isStringLikeSchema(schema: unknown): boolean {
   return typeof schema.const === 'string';
 }
 
+function coerceStringBoolean(value: string): boolean | undefined {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (['true', 'yes', 'y', '1', 'on', 'enabled', 'enable', 'pass', 'passed', 'success', 'succeeded', 'ok', '✅', '✓'].includes(normalized)) {
+    return true;
+  }
+  if (['false', 'no', 'n', '0', 'off', 'disabled', 'disable', 'fail', 'failed', 'failure', 'error', 'blocked', 'skipped', '❌', '✗'].includes(normalized)) {
+    return false;
+  }
+  return undefined;
+}
+
+function coerceBooleanForSchema(value: unknown): unknown {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') {
+    if (value === 1) return true;
+    if (value === 0) return false;
+  }
+  if (typeof value === 'string') {
+    return coerceStringBoolean(value) ?? value;
+  }
+  return value;
+}
+
+function coerceNumberForSchema(value: unknown, integer: boolean): unknown {
+  if (typeof value === 'number') return value;
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  if (!trimmed) return value;
+  if (integer && !/^[+-]?\d+$/.test(trimmed)) return value;
+  if (!integer && !/^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(trimmed)) return value;
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : value;
+}
+
+function normalizedEnumKey(value: string): string {
+  return value.trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+function coerceEnumForSchema(value: unknown, schema: Record<string, unknown>): unknown {
+  if (!Array.isArray(schema.enum)) return value;
+  if (schema.enum.some((item) => Object.is(item, value))) return value;
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    const boolValue = coerceStringBoolean(trimmed);
+    for (const item of schema.enum) {
+      if (typeof item === 'string' && normalizedEnumKey(item) === normalizedEnumKey(trimmed)) return item;
+      if (typeof item === 'boolean' && boolValue !== undefined && item === boolValue) return item;
+      if (typeof item === 'number') {
+        const parsed = coerceNumberForSchema(trimmed, Number.isInteger(item));
+        if (typeof parsed === 'number' && Object.is(parsed, item)) return item;
+      }
+    }
+  }
+
+  return value;
+}
+
 /**
  * items schema 是否为 primitive（string/number/integer/boolean 或 primitive enum）。
  * 仅对 primitive-items 数组做「对象/嵌套 → 叶子拍平」，避免对 object[] 做歧义猜测。
@@ -437,6 +519,12 @@ function normalizeValueForSchema(value: unknown, schema: unknown): unknown {
   const variants = schemaVariants(selected);
   if (variants.length > 0 && selected !== schema) return normalizeValueForSchema(value, selected);
   const type = Array.isArray(selected.type) ? selected.type[0] : selected.type;
+
+  const enumCoerced = coerceEnumForSchema(value, selected);
+  if (enumCoerced !== value) return enumCoerced;
+  if (type === 'boolean') return coerceBooleanForSchema(value);
+  if (type === 'integer') return coerceNumberForSchema(value, true);
+  if (type === 'number') return coerceNumberForSchema(value, false);
 
   if (type === 'array') {
     const itemsSchema = selected.items;
@@ -543,6 +631,127 @@ function validateToolProtocolArgs(toolName: string, args: unknown): { ok: true }
     formatted: missing.map((key) => `${key}: must be a non-empty string when source is "worker"`).join('; '),
     hints: missing.map((key) => ({ path: key, message: 'must be a non-empty string when source is "worker"' })),
   };
+}
+
+function truncateActivityText(value: string, max = 220): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  return normalized.length > max ? `${normalized.slice(0, max - 1)}…` : normalized;
+}
+
+function firstStringField(args: Record<string, unknown>, fields: string[]): string | undefined {
+  for (const field of fields) {
+    const value = args[field];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+function uniqueStrings(values: Array<string | undefined>, limit = 12): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (!value) continue;
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    out.push(trimmed);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+function extractActivityFiles(args: unknown): string[] | undefined {
+  if (!isRecord(args)) return undefined;
+  const direct = uniqueStrings([
+    firstStringField(args, ['path', 'output_path', 'file', 'screenshot_path', 'cwd', 'directory']),
+    ...((stringArray(args.files) ?? [])),
+  ]);
+  return direct.length > 0 ? direct : undefined;
+}
+
+function extractActivityAction(toolName: string, args: unknown): string | undefined {
+  if (!isRecord(args)) return toolName;
+  const action = args.action;
+  return typeof action === 'string' && action.trim() ? action.trim() : toolName;
+}
+
+function summarizeAgentActivity(toolName: string, args: unknown): { summary: string; target?: string; command?: string; files?: string[] } {
+  const record = isRecord(args) ? args : {};
+  const action = extractActivityAction(toolName, args);
+  const files = extractActivityFiles(args);
+  const target = files?.[0]
+    ?? firstStringField(record, ['url', 'branch', 'remote', 'tool', 'name', 'terminal_id', 'uri']);
+
+  if (toolName === 'shell') {
+    const command = firstStringField(record, ['command']);
+    return { summary: truncateActivityText(`shell: ${command ?? '(command)'}`), target, command, files };
+  }
+  if (toolName === 'python_exec') {
+    const command = firstStringField(record, ['code']);
+    return { summary: truncateActivityText('python_exec: code snippet'), target, command: command ? truncateActivityText(command, 160) : undefined, files };
+  }
+  if (toolName === 'file_create') {
+    return { summary: `file_create: ${target ?? '(path)'}`, target, files };
+  }
+  if (toolName === 'structured_patch') {
+    const hunkCount = Array.isArray(record.hunks) ? record.hunks.length : undefined;
+    return { summary: `structured_patch: ${target ?? '(path)'}${hunkCount ? ` (${hunkCount} hunks)` : ''}`, target, files };
+  }
+  if (toolName === 'git') {
+    const message = firstStringField(record, ['message', 'branch', 'remote', 'mr_title']);
+    return { summary: truncateActivityText(`git ${action ?? ''}${message ? `: ${message}` : ''}`), target, files };
+  }
+  if (toolName === 'mcp') {
+    const server = firstStringField(record, ['server']);
+    const mcpTool = firstStringField(record, ['tool']);
+    return { summary: truncateActivityText(`mcp ${action ?? ''}${server ? ` ${server}` : ''}${mcpTool ? `/${mcpTool}` : ''}`), target, files };
+  }
+
+  return { summary: truncateActivityText(`${toolName}${action && action !== toolName ? `: ${action}` : ''}${target ? ` → ${target}` : ''}`), target, files };
+}
+
+function shouldEmitAgentActivity(toolName: string, metadata: ToolMetadata): boolean {
+  if (metadata.readOnly) return false;
+  if (metadata.hidden) return false;
+  return metadata.tier === 'write' || metadata.tier === 'execute' || metadata.modifiesWorkspace === true;
+}
+
+function emitAgentActivityEvent(
+  toolName: string,
+  args: unknown,
+  result: ToolResult,
+  context: ToolContext | undefined,
+  metadata: ToolMetadata,
+  fallbackSessionId: string | null,
+): void {
+  if (!shouldEmitAgentActivity(toolName, metadata)) return;
+  if (!context?.emitter) return;
+  const sessionId = typeof context.sessionId === 'string' && context.sessionId.trim()
+    ? context.sessionId.trim()
+    : fallbackSessionId ?? '';
+  if (!sessionId) return;
+  const agentId = typeof context.agentId === 'string' && context.agentId.trim() ? context.agentId.trim() : 'leader';
+  const agentName = typeof context.agentName === 'string' && context.agentName.trim()
+    ? context.agentName.trim()
+    : agentId;
+  const activity = summarizeAgentActivity(toolName, args);
+  context.emitter.emit('agent:activity', {
+    sessionId,
+    agentId,
+    agentName,
+    taskId: typeof context.taskId === 'string' ? context.taskId : undefined,
+    toolName,
+    toolCategory: typeof metadata.category === 'string' ? metadata.category : undefined,
+    toolTier: metadata.tier,
+    action: extractActivityAction(toolName, args),
+    success: result.success,
+    timestamp: Date.now(),
+    summary: activity.summary,
+    target: activity.target,
+    files: activity.files,
+    command: activity.command,
+    error: result.success ? undefined : truncateActivityText(result.error ?? 'tool failed', 300),
+  });
 }
 
 export type { RegisteredTool };
@@ -1218,6 +1427,7 @@ export class ToolRegistry {
 
     // ── Execute tool ──
     const toolResult = await executeToolWithTimeout(name, tool, parsedArgs, context);
+    emitAgentActivityEvent(name, parsedArgs, toolResult, context, resolution.metadata, this.sessionId);
 
     if (isOfficeTool) {
       await auditOfficeToolExecution({
@@ -1237,6 +1447,30 @@ export class ToolRegistry {
         success: toolResult.success,
         argsSummary: parsedArgs,
       });
+    }
+
+    // ── ToolFailureLoopGuard：失败侧集中上报 ──
+    // Registry 是失败事实的唯一权威出口（mode_forbidden / scope_forbidden / 工具执行异常
+    // 全部走这里返回），由 Registry 集中上报可保证：所有走 resolveToolAndValidateArgs
+    // 早期失败的分支也都被记入熔断器，避免 BaseAgentRuntime 入口被旁路。
+    if (!toolResult.success) {
+      const errorText = typeof toolResult.error === 'string' ? toolResult.error : '';
+      if (errorText) {
+        try {
+          getToolFailureLoopGuard(undefined).record({
+            sessionId: context?.sessionId || this.sessionId || '<unknown>',
+            agentId: String(context?.agentId || ''),
+            agentName: String(context?.agentName || ''),
+            taskId: typeof context?.taskId === 'string' ? context.taskId : undefined,
+            toolName: name,
+            args: parsedArgs,
+            errorCode: extractErrorCodeFromText(errorText),
+            errorMessage: errorText.split('\n\nLLM_RECOVERY=')[0] || errorText,
+          });
+        } catch {
+          // 上报失败不应影响主路径
+        }
+      }
     }
 
     // ── 记录文件内容已知的工具 ──

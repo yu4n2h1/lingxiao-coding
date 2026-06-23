@@ -29,8 +29,12 @@ export function createTokenActions(
               prompt: acc.prompt + tokenNumber(item.prompt),
               completion: acc.completion + tokenNumber(item.completion),
               total: acc.total + tokenNumber(item.total),
+              cache_read: (acc.cache_read ?? 0) + tokenNumber(item.cache_read),
+              cache_creation: (acc.cache_creation ?? 0) + tokenNumber(item.cache_creation),
+              reasoning: (acc.reasoning ?? 0) + tokenNumber(item.reasoning),
+              credit: (acc.credit ?? 0) + tokenNumber(item.credit),
             }),
-            { prompt: 0, completion: 0, total: 0 }
+            { prompt: 0, completion: 0, total: 0, cache_read: 0, cache_creation: 0, reasoning: 0, credit: 0 }
           );
           // Only overwrite in-memory SSE-accumulated data if DB has more info.
           // This prevents a race where fetchTokenUsage() resolves after SSE events

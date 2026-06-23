@@ -54,6 +54,11 @@ const SLASH_COMMANDS: SlashCommandDefinition[] = [
     argCompleter: (partial) => ['status', 'on', 'off'].filter(m => m.startsWith(partial.toLowerCase())).map(m => ({ name: m, desc: `Team ${m}` })) },
   { name: '/route', desc: '设置 Leader 执行路由偏好', usage: '/route <auto|direct|delegate>', handledBy: 'callback', category: 'project',
     argCompleter: (partial) => ['auto', 'direct', 'delegate'].filter(m => m.startsWith(partial.toLowerCase())).map(m => ({ name: m, desc: `Route ${m}` })) },
+  { name: '/autonomy', desc: '查看/切换 Autonomy 自治档位', usage: '/autonomy <status|review_first|balanced|autonomous|full_auto> [bootstrap|active|recovery|stable]', handledBy: 'callback', category: 'project',
+    argCompleter: (partial) => ['status', 'review_first', 'balanced', 'autonomous', 'full_auto', 'bootstrap', 'active', 'recovery', 'stable']
+      .filter(m => m.startsWith(partial.toLowerCase()))
+      .map(m => ({ name: m, desc: `Autonomy ${m}` })) },
+
   { name: '/mode', desc: '切换权限模式', usage: '/mode <strict|dev|networked|yolo> [scope]', handledBy: 'callback', category: 'permission',
     argCompleter: (partial) => ['strict', 'dev', 'networked', 'yolo'].filter(m => m.startsWith(partial.toLowerCase())).map(m => ({ name: m, desc: `${m} 模式` })) },
   { name: '/allow-tool', desc: '添加 allow 规则', usage: '/allow-tool <tool> [pattern] [scope]', handledBy: 'callback', category: 'permission' },
@@ -152,6 +157,7 @@ const EN_COMMAND_DESCRIPTIONS: Record<string, string> = {
   '/eternal': 'Set/manage Eternal goal mode',
   '/team': 'Show/switch collaboration mode',
   '/route': 'Set Leader execution route preference',
+  '/autonomy': 'Show/switch Autonomy mode',
   '/mode': 'Switch permission mode',
   '/allow-tool': 'Add an allow rule',
   '/deny-tool': 'Add a deny rule',

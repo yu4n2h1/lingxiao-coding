@@ -632,6 +632,20 @@ export class WorkerProcessRunner extends EventEmitter {
     const handle = this.workers.get(workerId);
     if (!handle) return;
 
+    // EPIPE / ECONNRESET on IPC channel after child exit is benign —
+    // the exit handler already processes the real failure.
+    // Without this guard, the async 'error' event from a dead pipe
+    // would mark the worker as failed and emit session.agent.failed,
+    // even though handleWorkerExit has already (or will) handle it.
+    const errMsg = (error.message || '').toLowerCase();
+    const isPipeError = /epipe|econnreset|ipc channel closed/i.test(errMsg) ||
+      (error as NodeJS.ErrnoException).code === 'EPIPE' ||
+      (error as NodeJS.ErrnoException).code === 'ECONNRESET';
+    if (isPipeError && (handle.endTime !== undefined || handle.process.exitCode !== null || !handle.process.connected)) {
+      coreLogger.debug(`[WorkerProcessRunner] Benign ${(error as NodeJS.ErrnoException).code || ''} pipe error on dead worker ${workerId}, ignoring`);
+      return;
+    }
+
     handle.error = error;
     if (!isCoreWorkerActiveStatus(handle.status)) {
       return;

@@ -129,9 +129,17 @@ function AgentPanel({ onClose, onExpandChange }: { onClose: () => void; onExpand
       });
     }
 
-    return Array.from(byId.values())
+    const all = Array.from(byId.values())
       // 稳定排序：按首次出现时间升序，避免 tab 顺序随 SSE 事件到达序抖动
       .sort((a, b) => (a.spawnedAt ?? 0) - (b.spawnedAt ?? 0));
+    // 优先显示 running agent；终态 agent 保留但排在后面
+    return all.sort((a, b) => {
+      const aRunning = a.normalizedStatus === 'running' || a.normalizedStatus === 'recovering';
+      const bRunning = b.normalizedStatus === 'running' || b.normalizedStatus === 'recovering';
+      if (aRunning && !bRunning) return -1;
+      if (!aRunning && bRunning) return 1;
+      return 0;
+    });
   }, [agents, agentConversations]);
 
   const runningCount = useMemo(() =>

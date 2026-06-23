@@ -16,6 +16,7 @@ import type {
   WorkerParentMessage,
 } from '../core/WorkerProcessRunner.js';
 import type { ChatMessage } from '../llm/types.js';
+import type { TokenUsageView } from '../types/canonical.js';
 import type { BusMessageType } from '../core/BusMessageTypes.js';
 import type { AgentExecutionResult } from './AgentExecutionResult.js';
 import { agentLogger } from '../core/Log.js';
@@ -330,16 +331,18 @@ async function main(): Promise<void> {
       db.close();
     };
 
-    const usageMap = new Map<string, { prompt: number; completion: number; total: number; cache_read?: number; cache_creation?: number }>();
+    const usageMap = new Map<string, TokenUsageView>();
     const tokenTracker = {
-      addUsage: (agentId: string, usage: { prompt: number; completion: number; total: number; cache_read?: number; cache_creation?: number }, modelName?: string) => {
-        const current = usageMap.get(agentId) || { prompt: 0, completion: 0, total: 0, cache_read: 0, cache_creation: 0 };
+      addUsage: (agentId: string, usage: TokenUsageView, modelName?: string) => {
+        const current = usageMap.get(agentId) || { prompt: 0, completion: 0, total: 0, cache_read: 0, cache_creation: 0, reasoning: 0, credit: 0 };
         const next = {
           prompt: current.prompt + usage.prompt,
           completion: current.completion + usage.completion,
           total: current.total + usage.total,
           cache_read: (current.cache_read ?? 0) + (usage.cache_read ?? 0),
           cache_creation: (current.cache_creation ?? 0) + (usage.cache_creation ?? 0),
+          reasoning: (current.reasoning ?? 0) + (usage.reasoning ?? 0),
+          credit: (current.credit ?? 0) + (usage.credit ?? 0),
         };
         usageMap.set(agentId, next);
         sendMessage({

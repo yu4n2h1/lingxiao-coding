@@ -155,12 +155,17 @@ export function sanitizeOpenAIToolMessageSequence(messages: ChatMessage[]): Chat
       continue;
     }
 
-    flushMissingToolResults();
-
-    if (message.role === 'assistant' && message.tool_calls?.length) {
-      sanitized.push(message);
-      pendingToolCalls = [...message.tool_calls];
-      continue;
+    // 只有 assistant 消息（新的 tool_calls 批次）才触发 flush；
+    // system/user 消息可能由事件处理器在 tool 执行期间注入
+    // （如 orchestration:dag_updated → [Orchestration] status=...），
+    // 合法出现在 tool_call 和 tool_result 之间，不应触发 flush。
+    if (message.role === 'assistant') {
+      flushMissingToolResults();
+      if (message.tool_calls?.length) {
+        sanitized.push(message);
+        pendingToolCalls = [...message.tool_calls];
+        continue;
+      }
     }
 
     sanitized.push(message);

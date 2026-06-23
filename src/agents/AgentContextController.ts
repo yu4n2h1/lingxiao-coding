@@ -1,7 +1,9 @@
 import { config as runtimeConfig } from '../config.js';
 import { contentToPlainText, type ChatMessage } from '../llm/types.js';
 import { CONTRACT_PACK_MARKER } from '../core/ContractPack.js';
-import { HierarchicalContextManager } from '../core/HierarchicalContextManager.js';
+import {
+  stripOldImageParts,
+} from './messageMemoryBudget.js';
 
 export interface AgentContextControllerDeps {
   maxMessages?: number;
@@ -14,11 +16,9 @@ const PROTECTED_PREFIX_MESSAGES = 3;
 
 export class AgentContextController {
   private readonly maxMessages: number;
-  private readonly hierarchicalContext: HierarchicalContextManager;
 
   constructor(deps: AgentContextControllerDeps = {}) {
     this.maxMessages = Math.max(1, deps.maxMessages ?? runtimeConfig.agents.max_agent_messages);
-    this.hierarchicalContext = new HierarchicalContextManager();
   }
 
   addMessage(msg: ChatMessage, messages: ChatMessage[]): ChatMessage[] {
@@ -45,14 +45,13 @@ export class AgentContextController {
     return msg.role === 'system' && contentToPlainText(msg.content).trim().startsWith(CONTRACT_PACK_MARKER);
   }
 
-  trimMessageBuffer(messages: ChatMessage[], protectedCount: number, maxMessages = this.maxMessages): ChatMessage[] {
-    if (messages.length <= maxMessages) {
-      return messages;
-    }
-    return this.hierarchicalContext.buildContext(messages, {
+  trimMessageBuffer(messages: ChatMessage[], protectedCount: number, _maxMessages = this.maxMessages): ChatMessage[] {
+    // 只剥离旧图片 base64，不删任何消息（含 tool 消息）。
+    // 消息裁剪统一由 compact 路径负责。
+    return stripOldImageParts(messages, {
+      retainImageMessages: runtimeConfig.advanced.image_history_retain_rounds,
       protectedCount,
-      maxMessages,
-    }).messages;
+    });
   }
 }
 

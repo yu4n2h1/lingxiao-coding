@@ -64,10 +64,11 @@ Use `design_asset` to query theme reference sites for aesthetic calibration when
 
 ## Native Routes
 
-- PPTX: use `generate_pptx` for editable decks; inspect before multi-round edits; use `edit_pptx` for text, shape, image, bbox, and OOXML edits; validate slide master/layout relationships, media relationships, charts, and native timing.
-- DOCX: use `generate_docx`; inspect paragraphs, tables, and drawings; use `edit_docx` for text/table/layout edits; use `office_ops(action="review", office_action="apply_docx_comments" | "apply_docx_revisions")` for native Word comments and tracked revisions.
+- PPTX: default to `generate_pptx` for new editable decks (bundled/project `pptxgenjs`, native PowerPoint shapes); inspect before multi-round edits; use `edit_pptx` for text, shape, image, bbox, and OOXML edits; validate slide master/layout relationships, media relationships, charts, and native timing. Do not silently replace a requested PPTX/PowerPoint deck with HTML or Slidev.
+- HTML→PPTX: use `generate_html_document(..., exports=["pptx"])` only when the user wants HTML-first/high-fidelity visual export and editability is not required; this route renders each slide as a full-slide image, so text is not editable inside PowerPoint.
+- DOCX: use `generate_docx` for editable Word files (bundled/project `docx`); inspect paragraphs, tables, and drawings; use `edit_docx` for text/table/layout edits; use `office_ops(action="review", office_action="apply_docx_comments" | "apply_docx_revisions")` for native Word comments and tracked revisions.
 - XLSX: use `generate_xlsx` or `edit_xlsx`; keep calculations as formulas; run `office_ops(action="runtime", office_action="xlsx_recalc")` when formulas are present.
-- PDF: distinguish text-layer PDFs from image-only/scanned PDFs; use OCR when the text layer is missing; validate page count and expected text only when reliable.
+- PDF: for structured/simple PDFs use `generate_pdf` (pdfkit); for designed HTML/CSS/CJK/background/page-fidelity PDFs use `generate_html_document(..., exports=["pdf"])` (Chromium). Distinguish text-layer PDFs from image-only/scanned PDFs; use OCR when the text layer is missing; validate page count and expected text only when reliable.
 - Canvas/HTML/Markdown: use when the user explicitly wants web-native deliverables or visual reference canvases. Do not silently replace a requested PPTX/DOCX/XLSX with HTML.
 
 ## Runtime

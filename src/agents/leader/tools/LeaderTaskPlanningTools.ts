@@ -26,7 +26,7 @@ import { DatabaseRepositoryAdapter } from '../../../core/DatabaseRepositories.js
 import { existsSync, realpathSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fail } from '../LeaderToolFailure.js';
-import { resolveRoleFromName, ROLE_FALLBACK_DEFAULT } from '../../RoleRegistry.js';
+import { resolveRoleFromName, ROLE_FALLBACK_DEFAULT, type AgentRole } from '../../RoleRegistry.js';
 import { PRESET_ROLE_PROFILES } from '../../RoleCapabilityModel.js';
 import {
   normalizeBlueprint,
@@ -37,6 +37,7 @@ import {
   registerTaskId,
   unregisterTaskId,
   buildSubsystemContractSeeds,
+  type ProjectBlueprint,
   type SubsystemContractSeed,
 } from '../../../core/ProjectBlueprint.js';
 
@@ -54,6 +55,23 @@ function normalizeOptionalString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function parseBooleanFlag(value: unknown): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    return normalized === 'true' || normalized === '1' || normalized === 'yes';
+  }
+  return false;
+}
+
+function persistCustomRolesSnapshot(ctx: TaskPlanningContext): void {
+  ctx.leader.db.setSessionState(
+    ctx.leader.sessionId,
+    SESSION_KEYS.CUSTOM_ROLES,
+    JSON.stringify(ctx.leader.getRoleRegistry().toDict()),
+  );
+}
+
 function normalizeOptionalNumber(value: unknown): number | undefined {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value === 'string' && value.trim()) {
@@ -61,6 +79,29 @@ function normalizeOptionalNumber(value: unknown): number | undefined {
     if (Number.isFinite(parsed)) return parsed;
   }
   return undefined;
+}
+
+function isPathInside(parent: string, child: string): boolean {
+  const rel = relative(parent, child);
+  return rel === '' || (!!rel && !rel.startsWith('..') && !isAbsolute(rel));
+}
+
+function assertLeaderTaskScopeAllowed(ctx: TaskPlanningContext, scope: TaskScopeConfig): void {
+  const workspaceRoot = resolve(ctx.leader.workspace);
+  const sessionsRoot = resolve(workspaceRoot, '.lingxiao', 'sessions');
+  const currentSessionRoot = resolve(sessionsRoot, ctx.leader.sessionId);
+  const entries = [scope.working_directory, ...(scope.write_scope ?? [])]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+
+  for (const entry of entries) {
+    const resolved = resolve(workspaceRoot, entry);
+    if (!isPathInside(workspaceRoot, resolved)) {
+      throw fail(`任务 scope 超出当前 workspace: ${entry}`);
+    }
+    if (isPathInside(sessionsRoot, resolved) && !isPathInside(currentSessionRoot, resolved)) {
+      throw fail(`任务 scope 不能指向其他 session: ${entry}`);
+    }
+  }
 }
 
 function pickContractSurface(contract: Record<string, unknown> | undefined, fallback: string): string {
@@ -88,6 +129,12 @@ function normalizeContractContent(contract: Record<string, unknown> | undefined,
   }, null, 2);
 }
 
+type BlackboardContractWriteResult = {
+  status: 'written' | 'skipped' | 'failed';
+  tag?: string;
+  reason?: string;
+};
+
 function writeContractNodeToBlackboard(ctx: TaskPlanningContext, input: {
   taskId: string;
   subject: string;
@@ -95,24 +142,34 @@ function writeContractNodeToBlackboard(ctx: TaskPlanningContext, input: {
   contract?: Record<string, unknown>;
   evaluationPolicy?: Record<string, unknown>;
   surface?: string;
-}): void {
-  if (!input.contract && !input.evaluationPolicy) return;
+}): BlackboardContractWriteResult {
+  // evaluation_policy 只是验收策略,不能伪装成 contract:<surface> 活跃契约。
+  // 只有显式 contract 模板才物化为黑板 contract 节点。
+  if (!input.contract) {
+    return { status: 'skipped', reason: 'no explicit contract template' };
+  }
   try {
     const blackboard = (ctx.leader as unknown as { leaderBlackboard?: { blackboardGraph?: { addContract?: (input: unknown) => unknown } } }).leaderBlackboard;
     const graph = blackboard?.blackboardGraph;
-    if (!graph?.addContract) return;
+    if (!graph?.addContract) {
+      return { status: 'skipped', reason: 'blackboard contract graph unavailable' };
+    }
     const contractTitle = normalizeOptionalString(input.contract?.title) ?? input.subject;
     const contractContent = normalizeContractContent(input.contract, input.evaluationPolicy);
-    const surface = input.surface ?? input.taskId;
+    const surface = input.surface ?? normalizeOptionalString(input.contract.surface) ?? input.taskId;
+    const tag = `contract:${surface}`;
     graph.addContract({
       sessionId: ctx.leader.sessionId,
       title: `Contract: ${contractTitle}`,
       content: contractContent,
-      tags: [`contract:${surface}`, `contract:${input.taskId}`, `task:${input.taskId}`, `agent:${input.agentType}`],
+      tags: [tag, `contract:${input.taskId}`, `task:${input.taskId}`, `agent:${input.agentType}`, 'provenance:template'],
       createdBy: input.taskId,
     });
+    return { status: 'written', tag };
   } catch (err) {
-    leaderLogger.warn(`[LeaderTools] contract 节点写入失败 (task=${input.taskId}): ${err instanceof Error ? err.message : String(err)}`);
+    const reason = err instanceof Error ? err.message : String(err);
+    leaderLogger.warn(`[LeaderTools] contract 节点写入失败 (task=${input.taskId}): ${reason}`);
+    return { status: 'failed', reason };
   }
 }
 
@@ -129,6 +186,38 @@ type ContractTemplateResult = {
   ok: false;
   message: string;
 };
+
+type ContractTemplateOk = Extract<ContractTemplateResult, { ok: true }>;
+
+function formatTaskReadiness(ctx: TaskPlanningContext, task: BoardTask): string {
+  const readiness = ctx.leader.board.getTaskReadiness(task);
+  if (task.status === 'dispatchable') {
+    return readiness === 'ready' ? 'ready' : `${readiness} · raw=dispatchable`;
+  }
+  return readiness === task.status ? task.status : `${readiness} · raw=${task.status}`;
+}
+
+function formatBlockedReason(ctx: TaskPlanningContext, task: BoardTask): string {
+  const reason = ctx.leader.board.getBlockedReason(task);
+  return reason ? ` · blocked_reason=${reason}` : '';
+}
+
+function formatContractToolStatus(template: ContractTemplateOk, writeResult: BlackboardContractWriteResult): string {
+  const parts: string[] = [];
+  if (template.binding?.surface) {
+    parts.push(`contractBinding=contract:${template.binding.surface}[requireContract=${template.binding.requireContract === true},requireAck=${template.binding.requireAck === true}]`);
+  }
+  if (template.contract) {
+    const writeLabel = writeResult.status === 'written'
+      ? `blackboardWrite=written(${writeResult.tag ?? `contract:${template.binding?.surface ?? template.surface ?? '?'}`})`
+      : `blackboardWrite=${writeResult.status}${writeResult.reason ? `(${writeResult.reason})` : ''}`;
+    parts.push(writeLabel);
+  }
+  if (template.evaluationPolicy) {
+    parts.push('evaluation_policy=attached');
+  }
+  return parts.length > 0 ? ` · ${parts.join(' · ')}` : '';
+}
 
 function hasOwn(input: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(input, key);
@@ -342,11 +431,14 @@ function buildContractTemplate(input: {
     };
   }
 
+  const hasExplicitContractSurfaceArg = hasOwn(input.args, 'contract_surface');
   const explicitContractSurface = normalizeOptionalString(input.args.contract_surface);
-  const inheritedSurface = input.existing?.contractBinding?.surface;
-  const surface = contract || evaluationPolicy || explicitContractSurface || inheritedSurface
-    ? explicitContractSurface ?? normalizeOptionalString(contract?.surface ?? contract?.contract_surface) ?? inheritedSurface ?? pickContractSurface(contract, input.subject)
-    : undefined;
+  const contractSurface = normalizeOptionalString(contract?.surface ?? contract?.contract_surface);
+  const inheritedSurface = hasExplicitContractSurfaceArg ? undefined : input.existing?.contractBinding?.surface;
+  const surface = explicitContractSurface
+    ?? contractSurface
+    ?? inheritedSurface
+    ?? (contract ? pickContractSurface(contract, input.subject) : undefined);
   const version = normalizeOptionalNumber(input.args.contract_version ?? contract?.version ?? input.existing?.contractBinding?.version);
   if (version !== undefined && (version < 1 || !Number.isInteger(version))) {
     return { ok: false, message: 'contract_version 必须是正整数。' };
@@ -354,9 +446,21 @@ function buildContractTemplate(input: {
   const requestId = normalizeOptionalString(input.args.contract_request_id)
     ?? (surface ? `${surface}@v${version ?? 1}` : undefined);
   const isContractProducer = input.nodeKind === 'contract' || input.agentType === 'architect';
+  const isImplementationConsumer = !input.nodeKind || input.nodeKind === 'implement' || input.nodeKind === 'repair';
+  const hasExternalContractSurface = Boolean(explicitContractSurface || inheritedSurface);
+  const onlyPolicyOrAckTouched = !hasOwn(input.args, 'contract')
+    && !hasExplicitContractSurfaceArg
+    && !hasOwn(input.args, 'node_kind')
+    && !hasOwn(input.args, 'require_contract');
+  const defaultRequireContract = Boolean(
+    surface
+    && hasExternalContractSurface
+    && isImplementationConsumer
+    && !isContractProducer,
+  );
   const requireContract = hasOwn(input.args, 'require_contract')
     ? input.args.require_contract !== false
-    : input.existing?.contractBinding?.requireContract ?? Boolean(surface && !isContractProducer);
+    : (onlyPolicyOrAckTouched ? input.existing?.contractBinding?.requireContract : undefined) ?? defaultRequireContract;
   const requireAck = hasOwn(input.args, 'require_ack')
     ? input.args.require_ack === true
     : input.existing?.contractBinding?.requireAck ?? false;
@@ -378,7 +482,7 @@ function buildContractTemplate(input: {
       requestId,
       requireContract,
       requireAck,
-    } : input.existing?.contractBinding,
+    } : undefined,
     acceptanceCriteria,
   };
 }
@@ -583,6 +687,7 @@ export async function createTask(
       ? (args.write_scope as string[]).filter((value) => typeof value === 'string')
       : undefined,
   };
+  assertLeaderTaskScopeAllowed(ctx, scope);
   const requestedWorktreePolicy = normalizeWorktreePolicy(args.worktree_policy);
   const collaborationMode = resolveModeRuntimeProjection({
     sessionId: ctx.leader.sessionId,
@@ -694,14 +799,15 @@ export async function createTask(
   }
 
   let task: BoardTask;
+  let contractWriteResult: BlackboardContractWriteResult = { status: 'skipped', reason: 'not attempted' };
   try {
-    // contract / evaluation_policy 不再拼到 description 末尾，而是物化为 BlackboardGraph 节点。
-    // worker 通过 contract:<surface> tag 拉取契约，避免 description 被裸 JSON 污染。
+    // contract / evaluation_policy 不再拼到 description 末尾。
+    // 只有显式 contract 模板物化为 BlackboardGraph contract；evaluation_policy 仅保留在 orchestration 元数据中。
     task = ctx.leader.board.createTask(taskId, subject, description, agentType, blockedBy, [], effectiveScope, effectiveContext, {
       orchestration,
       preferred_agent_name: typeof args.preferred_agent_name === 'string' ? args.preferred_agent_name : undefined,
     });
-    writeContractNodeToBlackboard(ctx, {
+    contractWriteResult = writeContractNodeToBlackboard(ctx, {
       taskId: task.id,
       subject,
       agentType,
@@ -714,8 +820,9 @@ export async function createTask(
   }
 
   const subsystemWarning = registerTaskSubsystem(ctx, task.id, args);
+  const readinessLabel = formatTaskReadiness(ctx, task);
 
-  return `已创建任务 ${task.id}: ${task.subject} [${task.status}]${worktree ? ` · worktree:${worktree.branch}` : requestedWorktreePolicy !== 'none' ? ` · worktree_policy:${requestedWorktreePolicy}->${worktreePolicy}` : ''}${orchestration ? ` · orchestration:${orchestration.nodeKind ?? 'generic'} gen=${orchestration.generation ?? 0}` : ''}${contractTemplate.surface ? ` · contract 已写入/绑定黑板 (tag=contract:${contractTemplate.surface})` : ''}${agentTypeNote ? ` · 角色:${agentTypeNote}` : ''}${subsystemWarning ? ` · ${subsystemWarning}` : ''}`;
+  return `已创建任务 ${task.id}: ${task.subject} [${readinessLabel}]${formatBlockedReason(ctx, task)}${worktree ? ` · worktree:${worktree.branch}` : requestedWorktreePolicy !== 'none' ? ` · worktree_policy:${requestedWorktreePolicy}->${worktreePolicy}` : ''}${orchestration ? ` · orchestration:${orchestration.nodeKind ?? 'generic'} gen=${orchestration.generation ?? 0}` : ''}${formatContractToolStatus(contractTemplate, contractWriteResult)}${agentTypeNote ? ` · 角色:${agentTypeNote}` : ''}${subsystemWarning ? ` · ${subsystemWarning}` : ''}`;
 }
 
 /** update_task 实现 */
@@ -777,6 +884,12 @@ export async function updateTask(
   // 预绑定成员：允许改绑到另一个 team 成员，或传空字符串清除预绑定回到 Leader 决策。
   if (typeof args.preferred_agent_name === 'string') {
     updates.preferred_agent_name = args.preferred_agent_name.trim();
+  }
+  if (updates.working_directory !== undefined || updates.write_scope !== undefined) {
+    assertLeaderTaskScopeAllowed(ctx, {
+      working_directory: updates.working_directory ?? task.working_directory,
+      write_scope: updates.write_scope ?? task.write_scope,
+    });
   }
 
   const hasContractBindingUpdate = [
@@ -842,8 +955,9 @@ export async function updateTask(
 
   try {
     const updated = ctx.leader.board.updateTask(taskId, updates);
+    let contractWriteResult: BlackboardContractWriteResult = { status: 'skipped', reason: 'not attempted' };
     if (nextContractTemplate) {
-      writeContractNodeToBlackboard(ctx, {
+      contractWriteResult = writeContractNodeToBlackboard(ctx, {
         taskId: updated.id,
         subject: updated.subject,
         agentType: updated.agent_type,
@@ -853,10 +967,12 @@ export async function updateTask(
       });
     }
     const bindingLabel = updated.preferred_agent_name ? `预绑定=@${updated.preferred_agent_name}` : '预绑定=无';
-    const contractLabel = updated.orchestration?.contractBinding?.surface
-      ? ` · contract=contract:${updated.orchestration.contractBinding.surface}`
-      : '';
-    return `已更新任务 ${updated.id}: ${updated.subject} [blocked_by=${updated.blocked_by.join(', ') || '无'} · ${bindingLabel}${contractLabel}]`;
+    const contractLabel = nextContractTemplate
+      ? formatContractToolStatus(nextContractTemplate, contractWriteResult)
+      : updated.orchestration?.contractBinding?.surface
+        ? ` · contractBinding=contract:${updated.orchestration.contractBinding.surface}`
+        : '';
+    return `已更新任务 ${updated.id}: ${updated.subject} [${formatTaskReadiness(ctx, updated)}]${formatBlockedReason(ctx, updated)} · blocked_by=${updated.blocked_by.join(', ') || '无'} · ${bindingLabel}${contractLabel}`;
   } catch (error) {
     throw fail(`更新任务失败：${error instanceof Error ? error.message : String(error)}`);
   }
@@ -925,29 +1041,37 @@ export async function defineProjectBlueprint(
   args: Record<string, unknown> = {},
 ): Promise<string> {
   args = args && typeof args === 'object' ? args : {};
-  const existing = parseBlueprint(ctx.leader.db.getSessionState(ctx.leader.sessionId, SESSION_KEYS.PROJECT_BLUEPRINT));
-  const result = normalizeBlueprint({
-    subsystems: args.subsystems,
-    notes: args.notes,
-    existing,
+  let result: ProjectBlueprint | null = null;
+  ctx.leader.db.updateSessionState<unknown>(ctx.leader.sessionId, SESSION_KEYS.PROJECT_BLUEPRINT, (current) => {
+    const existing = parseBlueprint(current);
+    const normalized = normalizeBlueprint({
+      subsystems: args.subsystems,
+      notes: args.notes,
+      existing,
+    });
+    if ('error' in normalized) {
+      throw fail(normalized.error);
+    }
+    result = normalized;
+    return serializeBlueprint(normalized);
   });
-  if ('error' in result) {
-    throw fail(result.error);
+  if (!result) {
+    throw fail('define_project_blueprint 写入失败: 未生成有效蓝图。');
   }
-  ctx.leader.db.setSessionState(ctx.leader.sessionId, SESSION_KEYS.PROJECT_BLUEPRINT, serializeBlueprint(result));
-  const coverage = computeBlueprintCoverage(result);
+  const blueprint = result as ProjectBlueprint;
+  const coverage = computeBlueprintCoverage(blueprint);
   try {
-    ctx.leader.emitter.emit('leader:blueprint_updated', { sessionId: ctx.leader.sessionId, blueprint: result, coverage });
+    ctx.leader.emitter.emit('leader:blueprint_updated', { sessionId: ctx.leader.sessionId, blueprint, coverage });
   } catch (err) {
     leaderLogger.warn(`[LeaderTools] blueprint_updated 事件发送失败: ${err instanceof Error ? err.message : String(err)}`);
   }
   const implementCount = coverage.implemented.length + coverage.uncovered.length;
-  const header = `已定义项目蓝图 · ${result.subsystems.length} 子系统(implement ${implementCount} · defer ${coverage.deferred.length} · na ${coverage.notApplicable.length})。`;
+  const header = `已定义项目蓝图 · ${blueprint.subsystems.length} 子系统(implement ${implementCount} · defer ${coverage.deferred.length} · na ${coverage.notApplicable.length})。`;
   // 治本接线:蓝图存盘后,为每个 implement 子系统自动建 contract 前置任务(architect 产真契约)。
   // 陷阱A:不传 contract 模板(writeContractNodeToBlackboard 守卫不预写节点,真契约由 architect 经 graph_contract 物化才就绪);
   // 陷阱B 已修正:contract 任务也登记 subsystem,使 computeBlueprintCoverage 判定覆盖完整(避免"建了任务仍显示缺口"的 UX 摩擦);
   // 陷阱F:幂等——已有未完成同 surface 的 contract 任务则跳过,重复 define_project_blueprint 不翻倍。
-  const seeds = buildSubsystemContractSeeds(result);
+  const seeds = buildSubsystemContractSeeds(blueprint);
   const contractTaskNotes: string[] = [];
   for (const seed of seeds) {
     const dup = ctx.leader.board.getAllTasks().find((t) =>
@@ -1001,17 +1125,25 @@ function registerTaskSubsystem(ctx: TaskPlanningContext, taskId: string, args: R
   const subsystemId = normalizeOptionalString(args.subsystem);
   if (!subsystemId) return null;
   try {
-    const existing = parseBlueprint(ctx.leader.db.getSessionState(ctx.leader.sessionId, SESSION_KEYS.PROJECT_BLUEPRINT));
-    if (!existing) return null;
-    // 检查 subsystemId 是否存在于蓝图中,不存在时返回明确 warning 给 Leader
-    const subsystemExists = existing.subsystems.some((e) => e.subsystemId === subsystemId);
-    if (!subsystemExists) {
-      const validIds = existing.subsystems.map((e) => e.subsystemId).join(', ');
-      return `⚠ 子系统 "${subsystemId}" 不在当前蓝图中,任务 ${taskId} 未绑定到任何 subsystem。蓝图不会显示覆盖。合法 subsystem id: ${validIds}`;
-    }
-    const next = registerTaskId(existing, subsystemId, taskId);
-    ctx.leader.db.setSessionState(ctx.leader.sessionId, SESSION_KEYS.PROJECT_BLUEPRINT, serializeBlueprint(next));
-    ctx.leader.emitter.emit('leader:blueprint_updated', { sessionId: ctx.leader.sessionId, blueprint: next, coverage: computeBlueprintCoverage(next) });
+    let warning: string | null = null;
+    let next: ProjectBlueprint | null = null;
+    ctx.leader.db.updateSessionState<unknown>(ctx.leader.sessionId, SESSION_KEYS.PROJECT_BLUEPRINT, (current) => {
+      const existing = parseBlueprint(current);
+      if (!existing) return current;
+      // 检查 subsystemId 是否存在于蓝图中,不存在时返回明确 warning 给 Leader
+      const subsystemExists = existing.subsystems.some((e) => e.subsystemId === subsystemId);
+      if (!subsystemExists) {
+        const validIds = existing.subsystems.map((e) => e.subsystemId).join(', ');
+        warning = `⚠ 子系统 "${subsystemId}" 不在当前蓝图中,任务 ${taskId} 未绑定到任何 subsystem。蓝图不会显示覆盖。合法 subsystem id: ${validIds}`;
+        return current;
+      }
+      next = registerTaskId(existing, subsystemId, taskId);
+      return serializeBlueprint(next);
+    });
+    if (warning) return warning;
+    if (!next) return null;
+    const blueprint = next as ProjectBlueprint;
+    ctx.leader.emitter.emit('leader:blueprint_updated', { sessionId: ctx.leader.sessionId, blueprint, coverage: computeBlueprintCoverage(blueprint) });
 
     // A3: 自动绑定 contract_surface=subsystemId。
     // 任务无显式 contract_surface 且非 architect/contract 产出者时,把 subsystem id 作为 contract surface,
@@ -1041,11 +1173,11 @@ function registerTaskSubsystem(ctx: TaskPlanningContext, taskId: string, args: R
       // 任务无显式 blocked_by 且蓝图子系统有 dependsOn 时,把已登记的依赖子系统任务自动加为 blocked_by。
       // 不覆盖 Leader 显式指定的 blocked_by(尊重显式意图)。
       // contract 任务跳过:契约收敛是第一步,不应被依赖链阻塞。
-      const entry = next.subsystems.find((e) => e.subsystemId === subsystemId);
+      const entry = blueprint.subsystems.find((e) => e.subsystemId === subsystemId);
       const depSubsystemIds = entry?.dependsOn ?? [];
       if (!isContractProducer && depSubsystemIds.length > 0 && (!task.blocked_by || task.blocked_by.length === 0)) {
         const depTaskIds = depSubsystemIds
-          .flatMap((depId) => next.subsystems.find((e) => e.subsystemId === depId)?.taskIds ?? [])
+          .flatMap((depId) => blueprint.subsystems.find((e) => e.subsystemId === depId)?.taskIds ?? [])
           .filter((id) => id && id !== taskId);
         if (depTaskIds.length > 0) {
           try {
@@ -1066,11 +1198,16 @@ function registerTaskSubsystem(ctx: TaskPlanningContext, taskId: string, args: R
 /** 删任务时从蓝图登记中移除,保持覆盖判定一致。 */
 function unregisterTaskSubsystem(ctx: TaskPlanningContext, taskId: string): void {
   try {
-    const existing = parseBlueprint(ctx.leader.db.getSessionState(ctx.leader.sessionId, SESSION_KEYS.PROJECT_BLUEPRINT));
-    if (!existing) return;
-    const next = unregisterTaskId(existing, taskId);
-    ctx.leader.db.setSessionState(ctx.leader.sessionId, SESSION_KEYS.PROJECT_BLUEPRINT, serializeBlueprint(next));
-    ctx.leader.emitter.emit('leader:blueprint_updated', { sessionId: ctx.leader.sessionId, blueprint: next, coverage: computeBlueprintCoverage(next) });
+    let next: ProjectBlueprint | null = null;
+    ctx.leader.db.updateSessionState<unknown>(ctx.leader.sessionId, SESSION_KEYS.PROJECT_BLUEPRINT, (current) => {
+      const existing = parseBlueprint(current);
+      if (!existing) return current;
+      next = unregisterTaskId(existing, taskId);
+      return serializeBlueprint(next);
+    });
+    if (!next) return;
+    const blueprint = next as ProjectBlueprint;
+    ctx.leader.emitter.emit('leader:blueprint_updated', { sessionId: ctx.leader.sessionId, blueprint, coverage: computeBlueprintCoverage(blueprint) });
   } catch (err) {
     leaderLogger.warn(`[LeaderTools] subsystem 反注册失败 (task=${taskId}): ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -1153,6 +1290,40 @@ export function materializeRoleDefinition(
 /** list_available_roles 实现 */
 export function listAvailableRoles(ctx: TaskPlanningContext): string {
   return ctx.leader.getRoleRegistry().toLLMContext();
+}
+
+/** delete_agent_role 实现：删除 define_agent_role/create_task(role_definition) 产生的 runtime 自定义角色 */
+export function deleteAgentRole(ctx: TaskPlanningContext, args: Record<string, unknown>): string {
+  const roleName = normalizeOptionalString(args.role_name ?? args.name);
+  if (!roleName) {
+    throw fail('role_name 不能为空');
+  }
+
+  const role = ctx.leader.getRoleRegistry().get(roleName) as AgentRole | undefined;
+  if (!role) {
+    return `角色 '${roleName}' 不存在，无需删除。`;
+  }
+  if (role.createdBy === 'system') {
+    throw fail(`不能删除系统预设角色 '${roleName}'。如需调整工具，请使用角色 override/reset。`);
+  }
+  if (role.createdBy === 'user') {
+    throw fail(`角色 '${roleName}' 来自持久化 custom agent 文件。请在 Settings → Roles 删除该 agent 文件，或删除 .lingxiao/agents/${roleName}.md。`);
+  }
+
+  const force = parseBooleanFlag(args.force);
+  const activeRefs = ctx.leader.board.getAllTasks()
+    .filter((task) => task.agent_type === roleName && task.status !== 'terminal')
+    .map((task) => `${task.id}:${task.status}`);
+  if (activeRefs.length > 0 && !force) {
+    throw fail(`角色 '${roleName}' 仍被未终态任务引用：${activeRefs.join(', ')}。如确认只删除角色定义并保留任务记录，请传 force=true。`);
+  }
+
+  const removed = ctx.leader.getRoleRegistry().unregister(roleName);
+  if (!removed) {
+    throw fail(`角色 '${roleName}' 删除失败。`);
+  }
+  persistCustomRolesSnapshot(ctx);
+  return `已删除 runtime 自定义角色 '${roleName}'。`;
 }
 
 /** update_task_status 实现：UI 状态语义 → TaskBoard 状态机 */

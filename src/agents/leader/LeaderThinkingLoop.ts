@@ -478,6 +478,8 @@ export class LeaderThinkingEngine {
         total: response.usage!.total_tokens,
         cache_read: response.usage!.cache_read_input_tokens,
         cache_creation: response.usage!.cache_creation_input_tokens,
+        reasoning: response.usage!.reasoning_tokens,
+        credit: response.usage!.credit,
       }, this.opts.getModel());
     } else {
       // 回退估算：当 provider 不返回 usage 或 usage 为 0 时，本地估算
@@ -659,10 +661,15 @@ export class LeaderThinkingEngine {
     this.opts.setLastProgressAtMs(Date.now());
     emitter.emit('leader:busy', { sessionId, isBusy: true, queueLength: 0 });
 
-    // Hot-reload model config
-    const latestModel = runtimeConfig.llm.leader_model;
-    if (latestModel && latestModel !== this.opts.getModel()) {
-      this.opts.setModel(latestModel);
+    // Hot-reload model config — respect session-level model override.
+    // If the user switched model via the chat UI (which writes CURRENT_MODEL to
+    // session state), do NOT clobber it with the global default.
+    const sessionModelOverride = db.getSessionState(sessionId, SESSION_KEYS.CURRENT_MODEL);
+    if (!sessionModelOverride) {
+      const latestModel = runtimeConfig.llm.leader_model;
+      if (latestModel && latestModel !== this.opts.getModel()) {
+        this.opts.setModel(latestModel);
+      }
     }
 
     try {
@@ -884,6 +891,14 @@ export class LeaderThinkingEngine {
                       sessionId,
                       status: '⏱️ 单轮超时次数耗尽，等待人工介入',
                     });
+                    // 抢救 partial content：LLM 超时前可能已输出部分内容，注入对话历史避免白输
+                    const partial = (error as unknown as Record<string, unknown>).partialContent;
+                    if (typeof partial === 'string' && partial.trim()) {
+                      this.opts.addMessage({ role: 'assistant', content: partial });
+                      const pc = this.opts.getConversation();
+                      await db.saveConversationMessage(sessionId, pc[pc.length - 1]);
+                      leaderLogger.info(`Leader 单轮超时终态：已抢救 partial content (${partial.length} chars)`);
+                    }
                     this.opts.addMessage({
                       role: 'system',
                       content: `⏱️ [系统终止] Leader 单轮 LLM 调用连续超时 ${toRetry}/${outerMax} 次。请检查 provider 状态或网络连接。`,
@@ -927,6 +942,14 @@ export class LeaderThinkingEngine {
                     sessionId,
                     status: `🛑 Provider 持续不可用：等待人工介入`,
                   });
+                  // 抢救 partial content
+                  const partialCb = (error as unknown as Record<string, unknown>).partialContent;
+                  if (typeof partialCb === 'string' && partialCb.trim()) {
+                    this.opts.addMessage({ role: 'assistant', content: partialCb });
+                    const pcb = this.opts.getConversation();
+                    await db.saveConversationMessage(sessionId, pcb[pcb.length - 1]);
+                    leaderLogger.info(`Leader CB OPEN 终态：已抢救 partial content (${partialCb.length} chars)`);
+                  }
                   const stopMsg = `🛑 [系统终止] Provider 持续不可用（Circuit Breaker 已连续触发 ${cbRetry}/${outerMax} 次）。请检查 provider 状态或更换模型后再继续。`;
                   this.opts.addMessage({ role: 'system', content: stopMsg });
                   const c2 = this.opts.getConversation();
@@ -941,6 +964,30 @@ export class LeaderThinkingEngine {
               const classified = classifyLLMError(error);
               const errorLabel = formatLLMErrorLabel(classified);
               const retryCount = llmGuard.getRetryCount();
+
+              // === 超时错误：LlmGuard 已不重试直接抛出。走 ESC 中断语义：不注入错误消息、
+              // 不累加外层重试计数，直接 continue 让主循环重新发起 LLM 请求。
+              // CircuitBreaker 已在 LlmGuard 内累积失败计数，持续超时最终熔断走 CircuitOpenError 停下。
+              if (
+                classified.llmErrorKind === 'request_timeout' ||
+                classified.llmErrorKind === 'connect_timeout' ||
+                classified.llmErrorKind === 'stream_timeout'
+              ) {
+                leaderLogger.warn(`Leader LLM 超时 (${errorLabel})，中断当前轮次并重新请求`);
+                emitter.emit('leader:status', {
+                  sessionId,
+                  status: `⏱️ LLM 超时，重新请求中...`,
+                });
+                // 抢救 partial content
+                const partialTimeout = (error as unknown as Record<string, unknown>).partialContent;
+                if (typeof partialTimeout === 'string' && partialTimeout.trim()) {
+                  this.opts.addMessage({ role: 'assistant', content: partialTimeout });
+                  const pc = this.opts.getConversation();
+                  await db.saveConversationMessage(sessionId, pc[pc.length - 1]);
+                  leaderLogger.info(`Leader 超时重请求：已抢救 partial content (${partialTimeout.length} chars)`);
+                }
+                return { type: 'continue' };
+              }
 
               // 打印完整错误详情（含堆栈）
               const rawDetail = error instanceof Error
@@ -1030,6 +1077,14 @@ export class LeaderThinkingEngine {
                   sessionId,
                   status: `🛑 LLM 反复失败 (${errorLabel})：等待人工介入`,
                 });
+                // 抢救 partial content：LlmGuard 内部重试时可能已累积部分输出
+                const partialFinal = (error as unknown as Record<string, unknown>).partialContent;
+                if (typeof partialFinal === 'string' && partialFinal.trim()) {
+                  this.opts.addMessage({ role: 'assistant', content: partialFinal });
+                  const pfc = this.opts.getConversation();
+                  await db.saveConversationMessage(sessionId, pfc[pfc.length - 1]);
+                  leaderLogger.info(`Leader 外层重试耗尽终态：已抢救 partial content (${partialFinal.length} chars)`);
+                }
                 const stopMsg = `🛑 [系统终止] LLM 调用反复失败（${errorLabel}: ${classified.message}），外层已自动重试 ${outerRetry}/${outerMax} 次仍未恢复。请检查网络 / provider 状态后再继续。\n完整错误: ${rawDetail}`;
                 this.opts.addMessage({ role: 'system', content: stopMsg });
                 const c2 = this.opts.getConversation();

@@ -5,10 +5,10 @@ export type ViewName =
   | 'chat' | 'tasks' | 'plugins' | 'terminal' | 'canvas' | 'artifact'
   | 'editor' | 'changes' | 'settings'
   | 'keybindings' | 'metrics' | 'stats' | 'traces'
-  | 'workers' | 'logs' | 'docs' | 'wiki' | 'git' | 'blackboard'
+  | 'workers' | 'docs' | 'wiki' | 'git' | 'blackboard'
   | 'team' | 'design-market' | 'memory'
   | 'blueprint' | 'langfuse'
-  | 'git-activity';
+  | 'git-activity' | 'agent-activity';
 
 const PANEL_STATE_KEY = 'lingxiao-panel-state';
 
@@ -46,10 +46,10 @@ const validViews: ViewName[] = [
   'chat', 'tasks', 'plugins', 'terminal', 'canvas',
   'artifact', 'editor', 'changes', 'settings',
   'keybindings', 'metrics', 'stats', 'traces',
-  'workers', 'logs', 'docs', 'wiki', 'git', 'blackboard',
+  'workers', 'docs', 'wiki', 'git', 'blackboard',
   'team', 'design-market', 'memory',
   'blueprint', 'langfuse',
-  'git-activity',
+  'git-activity', 'agent-activity',
 ];
 
 const initialPanelState = loadPanelState();

@@ -30,7 +30,7 @@ import RunStatusStrip from './RunStatusStrip';
 import { useWorkbenchContext } from './useWorkbenchContext';
 import ConfirmationDialog from '../ui/ConfirmationDialog';
 import { messagesToMarkdown, downloadAsFile, copyToClipboard, getExportFilename } from '../../utils/exportConversation';
-import { calculateCost, formatCost } from '../../utils/costCalculator';
+import { calculateCostDetailed, formatCost } from '../../utils/costCalculator';
 import { estimateTokens, formatTokenCount } from '../../utils/estimateTokens';
 import {
   deriveRuntimeWaitGate,
@@ -215,13 +215,13 @@ function formatModelLabel(entry: ModelEntry): string {
   return `${displayPart}（via ${entry.providerName}）`;
 }
 
-function getWorkspaceModelPreferenceKey(workspace: string): string {
-  return `lingxiao:model-preference:${workspace || 'default'}`;
+function getSessionModelPreferenceKey(sessionId: string): string {
+  return `lingxiao:model-preference:session:${sessionId || 'default'}`;
 }
 
-function readWorkspaceModelPreference(workspace: string): { leaderModel?: string; agentModel?: string } {
+function readSessionModelPreference(sessionId: string): { leaderModel?: string; agentModel?: string } {
   try {
-    const raw = localStorage.getItem(getWorkspaceModelPreferenceKey(workspace));
+    const raw = localStorage.getItem(getSessionModelPreferenceKey(sessionId));
     const parsed = raw ? JSON.parse(raw) : null;
     return {
       leaderModel: typeof parsed?.leaderModel === 'string' ? parsed.leaderModel : undefined,
@@ -304,10 +304,10 @@ function ChatTimelineRail({
   );
 }
 
-function writeWorkspaceModelPreference(workspace: string, patch: { leaderModel?: string; agentModel?: string }): void {
+function writeSessionModelPreference(sessionId: string, patch: { leaderModel?: string; agentModel?: string }): void {
   try {
-    const prev = readWorkspaceModelPreference(workspace);
-    localStorage.setItem(getWorkspaceModelPreferenceKey(workspace), JSON.stringify({ ...prev, ...patch }));
+    const prev = readSessionModelPreference(sessionId);
+    localStorage.setItem(getSessionModelPreferenceKey(sessionId), JSON.stringify({ ...prev, ...patch }));
   } catch (error) {
     console.warn('[ChatView] Failed to persist workspace model preference:', error);
   }
@@ -894,9 +894,9 @@ export default function ChatView() {
       });
       const json = await res.json();
       const data = json?.data || {};
-      const workspacePreference = readWorkspaceModelPreference(activeWorkspace);
-      const nextLeaderModel = data.model || workspacePreference.leaderModel || '';
-      const nextAgentModel = data.agentModel || workspacePreference.agentModel || data.model || '';
+      const sessionPreference = readSessionModelPreference(sessionId || '');
+      const nextLeaderModel = sessionPreference.leaderModel || data.model || '';
+      const nextAgentModel = sessionPreference.agentModel || sessionPreference.leaderModel || data.model || '';
       if (nextLeaderModel) setLeaderModel(nextLeaderModel);
       if (nextAgentModel) setAgentModel(nextAgentModel);
       const allModels: ModelEntry[] = [];
@@ -907,7 +907,7 @@ export default function ChatView() {
       }
       setAvailableModels(allModels);
     } catch (e) { console.warn('[ChatView] fetchModels failed:', e); }
-  }, [activeWorkspace]);
+  }, [sessionId, activeWorkspace]);
 
   // 获取当前模型 + 可用模型列表；Settings 是真实配置源，工作区偏好只作为旧版本兜底。
   useEffect(() => {
@@ -917,8 +917,9 @@ export default function ChatView() {
   useEffect(() => {
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<SettingsChangedDetail>).detail;
-      // 模型配置刷新、模型选择变更、provider 变更都会影响 chat 模型切换器。
-      if (detail?.key === 'modelRegistry' || detail?.key === 'model' || detail?.key === 'agentModel' || detail?.key === 'providers') {
+      // Only refresh on provider/model registry changes — NOT on 'model'/'agentModel' key changes,
+      // because those are now session-scoped and should NOT propagate across sessions.
+      if (detail?.key === 'modelRegistry' || detail?.key === 'providers') {
         fetchModels();
       }
       // 思考开关热加载：设置页改了也要即时跟随，避免顶栏开关与后端脱节。
@@ -1045,31 +1046,24 @@ export default function ChatView() {
   const handleSwitchModel = async (target: ModelPickerTarget, model: string) => {
     const previousLeaderModel = leaderModel;
     const previousAgentModel = agentModel;
-    const key = target === 'leader' ? 'model' : 'agentModel';
     setModelSwitching(target);
     setModelSwitchError(null);
     setShowModelPicker(null);
     if (target === 'leader') setLeaderModel(model);
     else setAgentModel(model);
     try {
-      await settingsApiFetch('/settings/general', {
-        method: 'PUT',
-        body: JSON.stringify({ key, value: model }),
-      });
-      notifySettingChanged({ key, value: model });
-      writeWorkspaceModelPreference(activeWorkspace, target === 'leader' ? { leaderModel: model } : { agentModel: model });
+      // Session-level model switch only — do NOT write global settings or broadcast
+      // SETTINGS_CHANGED_EVENT, which would pollute other sessions' model state.
+      writeSessionModelPreference(sessionId || '', target === 'leader' ? { leaderModel: model } : { agentModel: model });
       if (isConnected) {
-        try {
-          await acpClient.sendJsonRpc(target === 'leader' ? 'session/set_model' : 'session/set_agent_model', { model });
-        } catch (rpcError) {
-          console.warn('[ChatView] runtime model switch failed after settings save:', rpcError);
-          setModelSwitchError(rpcError instanceof Error ? rpcError.message : '模型已保存，当前会话热切换失败');
-        }
+        await acpClient.sendJsonRpc(target === 'leader' ? 'session/set_model' : 'session/set_agent_model', { model });
+      } else {
+        throw new Error('Not connected to server');
       }
     } catch (e) {
       setLeaderModel(previousLeaderModel);
       setAgentModel(previousAgentModel);
-      writeWorkspaceModelPreference(activeWorkspace, { leaderModel: previousLeaderModel, agentModel: previousAgentModel });
+      writeSessionModelPreference(sessionId || '', { leaderModel: previousLeaderModel, agentModel: previousAgentModel });
       setModelSwitchError(e instanceof Error ? e.message : '模型切换失败');
     } finally {
       setModelSwitching(null);
@@ -2622,25 +2616,61 @@ export default function ChatView() {
                 <span className={tokenUsage.total > 800000 ? 'text-accent-red' : tokenUsage.total > 500000 ? 'text-accent-yellow' : 'text-text-tertiary'}>{formatTokens(tokenUsage.total)}</span>
                 <span className="text-text-tertiary/40">↑{formatTokens(tokenUsage.prompt)}</span>
                 <span className="text-text-tertiary/40">↓{formatTokens(tokenUsage.completion)}</span>
+                {(tokenUsage.reasoning ?? 0) > 0 && <span className="text-text-tertiary/40">think {formatTokens(tokenUsage.reasoning ?? 0)}</span>}
+                {((tokenUsage.cache_read ?? 0) + (tokenUsage.cache_creation ?? 0)) > 0 && <span className="text-text-tertiary/40">cache {formatTokens((tokenUsage.cache_read ?? 0) + (tokenUsage.cache_creation ?? 0))}</span>}
               </div>
               {/* 消耗轨迹火花图:斜率即烧 token 速率 */}
               <TokenSparkline data={tokenHistory} />
-              {/* Cost display */}
-              <span className="text-[10px] font-mono text-accent-green/70" title={t('chat.cost.tooltip', 'Estimated cost based on model pricing')}>
-                {formatCost(calculateCost(leaderModel || 'default', {
+              {/* Cost display — 区分 estimated/partial/cache hit,避免伪精确 */}
+              {(() => {
+                const cost = calculateCostDetailed(leaderModel || 'default', {
                   prompt: tokenUsage.prompt,
                   completion: tokenUsage.completion,
                   cache_read: tokenUsage.cache_read,
                   cache_creation: tokenUsage.cache_creation,
-                }))}
-              </span>
+                });
+                const tooltipKey = cost.partial
+                  ? 'chat.cost.tooltipPartial'
+                  : (cost.estimated ? 'chat.cost.tooltip' : 'chat.cost.tooltip');
+                const tooltip = cost.partial
+                  ? t(tooltipKey, { rate: cost.cacheHitRate.toFixed(0) })
+                  : t(tooltipKey);
+                const accentClass = cost.partial
+                  ? 'text-accent-yellow/80'
+                  : (cost.estimated ? 'text-accent-green/60' : 'text-accent-green/80');
+                return (
+                  <span
+                    className={`flex items-center gap-1 text-[10px] font-mono ${accentClass}`}
+                    title={tooltip}
+                    data-pricing-partial={cost.partial ? 'true' : undefined}
+                    data-pricing-estimated={cost.estimated ? 'true' : undefined}
+                  >
+                    <span>~{formatCost(cost.total)}</span>
+                    {cost.partial && (
+                      <span className="px-1 rounded-sm bg-accent-yellow/15 text-accent-yellow/90 border border-accent-yellow/30">
+                        {t('chat.cost.partialBadge')}
+                      </span>
+                    )}
+                    {!cost.partial && cost.estimated && (
+                      <span className="px-1 rounded-sm bg-text-tertiary/15 text-text-tertiary border border-text-tertiary/30">
+                        {t('chat.cost.estimatedBadge')}
+                      </span>
+                    )}
+                    {cost.cacheHitRate > 0 && (
+                      <span className="text-text-tertiary/70">
+                        {t('chat.cost.cacheHitSuffix', { rate: cost.cacheHitRate.toFixed(0) })}
+                      </span>
+                    )}
+                  </span>
+                );
+              })()}
               {/* Context window 占用 — 显示当前窗口已用/总量，而非累计消耗 */}
               {ctxPct !== null && (
                 <div className={`flex items-center gap-0.5 text-[10px] font-mono px-1 ${
                   contextRuntimeState!.warningLevel === 'critical' ? 'text-accent-red' :
                   contextRuntimeState!.warningLevel === 'warning' ? 'text-accent-yellow' : 'text-text-tertiary'
                 }`} title={t('chat.input.contextWindowTooltip', { current: formatTokens(contextRuntimeState!.currentTokens), max: formatTokens(contextRuntimeState!.maxTokens) })}>
-                  ctx {formatTokens(contextRuntimeState!.currentTokens)}/{formatTokens(contextRuntimeState!.maxTokens)}
+                  ctx≈{formatTokens(contextRuntimeState!.currentTokens)}/{formatTokens(contextRuntimeState!.maxTokens)}
                 </div>
               )}
               <button onClick={handleCompress} disabled={isCompressing || compactingActive || runActive}

@@ -27,6 +27,7 @@ import {
   type ToolDefinition,
 } from '../llm/types.js';
 import type { ContentGenerator } from '../llm/ContentGenerator.js';
+import type { TokenUsageView } from '../types/canonical.js';
 import type { ToolRegistry } from '../tools/Registry.js';
 import type { MessageBus } from '../core/MessageBus.js';
 import type { EventEmitter } from '../core/EventEmitter.js';
@@ -98,6 +99,8 @@ import { healInterruptedToolCalls } from '../llm/message_sanitizer.js';
 import type { ToolResultContent } from './runtime/ToolResponseProcessor.js';
 import { executeToolCallsWithTruncationGuard, rejectEmptyArgsFileTools } from './runtime/ToolCallSafety.js';
 import { ToolLoopDetector } from './runtime/ToolLoopDetector.js';
+import { getToolFailureLoopGuard, type LoopGuardDecision } from './runtime/ToolFailureLoopGuard.js';
+import { createToolFailureLoopEscalationPayload } from '../core/AgentProtocol.js';
 import { createStreamHookBuffers, wrapLlmHooksForEmitter } from './runtime/LlmStreamHooks.js';
 import {
   formatIncomingContent,
@@ -165,12 +168,47 @@ import type { AgentTask } from '../types/canonical.js';
 // Task — re-exported from canonical (agent-facing lightweight subset)
 export type Task = AgentTask;
 
+/**
+ * 把 ToolFailureLoopGuard 的熔断决策转成给 LLM 看的 ERROR 文案。
+ * 放在模块顶层（不依赖 class state）以便未来跨模块复用 + 纯函数可单测。
+ */
+export function formatToolFailureLoopError(
+  toolName: string,
+  decision: LoopGuardDecision,
+): string {
+  const lines = [
+    `TOOL_FAILURE_LOOP_TRIPPED: 工具 "${toolName}" 连续 ${decision.count} 次以相同 args + 错误类型（${decision.errorKind}）失败，已自动熔断。`,
+  ];
+  if (decision.requiresEscalation) {
+    lines.push('本错误属于状态类（permission / mode / write_scope / sandbox / network / schema），继续重试不会改变结果。');
+    lines.push('下一步：请通过 escalate_to_leader 或 request_permission_update 申请 Leader 介入；不要再次发起相同调用。');
+  } else {
+    lines.push('本错误非状态类，但已超过熔断阈值，避免 LLM 在已熔断的 key 上继续消耗 round。');
+    lines.push('下一步：可主动调整 args 后再试，或通过 escalate_to_leader 上报。');
+  }
+  lines.push(`\nLLM_RECOVERY=${JSON.stringify({
+    code: 'TOOL_FAILURE_LOOP_TRIPPED',
+    message: lines.join(' '),
+    retryable: false,
+    fix: 'Do not retry the same toolName+args+errorKind combination. Escalate to leader or change strategy.',
+    failure_loop: {
+      toolName: decision.signature.toolName,
+      argsHash: decision.signature.argsHash,
+      errorKind: decision.signature.errorKind,
+      errorCode: decision.signature.errorCode,
+      count: decision.count,
+      requiresEscalation: decision.requiresEscalation,
+    },
+  })}`);
+  return lines.join('\n');
+}
+
 export interface TokenTracker {
-  addUsage(agentId: string, usage: { prompt: number; completion: number; total: number; cache_read?: number; cache_creation?: number }, modelName?: string): void;
+  addUsage(agentId: string, usage: TokenUsageView, modelName?: string): void;
   getTotal(): number;
   loadHistory(sessionId: string): void;
   getSessionTotal(): number;
-  usageMap?: Map<string, { prompt: number; completion: number; total: number; cache_read?: number; cache_creation?: number }>;
+  usageMap?: Map<string, TokenUsageView>;
 }
 
 /**
@@ -377,6 +415,10 @@ export class BaseAgent {
    * run() 结束后透传给 WorkerProcessEntry → task_complete payload → Leader。
    */
   protected attemptCompletion?: AttemptCompletionStructuredResult;
+  /** 权限超时计数：连续超时 2 次则终止 agent */
+  protected permissionTimeoutCount = 0;
+  /** 标记 agent 应终止（权限超时等场景） */
+  protected shouldTerminate = false;
 
   protected get toolCallCount(): number {
     return this.runtimeState.toolCallCount;
@@ -515,6 +557,12 @@ export class BaseAgent {
         sessionId: this.sessionId,
         status: `⚠️ 权限审批超时: ${toolName}`,
       });
+      // 权限超时：标记终止，让 LLM 循环不再重试该工具
+      this.permissionTimeoutCount = (this.permissionTimeoutCount || 0) + 1;
+      if (this.permissionTimeoutCount >= 2) {
+        // 连续 2 次权限超时，终止 agent
+        this.shouldTerminate = true;
+      }
       return false;
     }
     const parsed = readAgentControlMessage(response);
@@ -1409,6 +1457,64 @@ export class BaseAgent {
         gitIdentity: this.gitIdentity,
       });
 
+      // ── ToolFailureLoopGuard：失败先记账，再决定是否重试 ──
+      // 任何工具失败（无论 success=false 还是 PERMISSION_REQUIRED 路径）都先进入 guard
+      // 计数；同 toolName+argsHash+errorKind 累计达阈值时 guard.tripped=true，
+      // 此时不再走本地 PERMISSION_REQUIRED 重试（避免 LLM 自循环），转而构造熔断
+      // 错误返回给上层，Leader/Health 侧通过 agent:tool_failure_loop 事件响应。
+      if (!result.success) {
+        const failureDecision = this.recordToolFailure(name, args, result.error);
+        if (failureDecision.tripped) {
+          // 状态类错误必须升级；其他类型也立即返回熔断结果（防止 LLM 继续调同一 key）
+          const trippedError = formatToolFailureLoopError(name, failureDecision);
+          this.logEvent('tool_failure_loop_tripped', {
+            toolName: name,
+            argsHash: failureDecision.signature.argsHash,
+            errorKind: failureDecision.errorKind,
+            errorCode: failureDecision.signature.errorCode,
+            count: failureDecision.count,
+            threshold: failureDecision.count + 1,
+            requiresEscalation: failureDecision.requiresEscalation,
+          }).catch(() => {});
+          this.emitter.emit('agent:status', {
+            agentId: this.agentId,
+            agentName: this.name,
+            sessionId: this.sessionId,
+            status: failureDecision.requiresEscalation
+              ? `🛑 工具 "${name}" 连续 ${failureDecision.count} 次失败（${failureDecision.errorKind}），已停止自循环，需 Leader 介入`
+              : `⚠️ 工具 "${name}" 连续 ${failureDecision.count} 次失败（${failureDecision.errorKind}），已停止自循环`,
+          });
+          // 升级到 Leader：bus 发 tool_failure_loop_escalation 消息，LeaderPermissionManager
+          // 据 errorKind 自动选众合理动作（自动放行 / 拒绝 / 交互审批）。仅 worker 侧发送；
+          // leader 自身不需自升级（这里 name === 'leader' 的场景在 BaseAgentRuntime 中不执行）。
+          if (this.bus && this.name !== 'leader') {
+            const escalationRequestId = `tfl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            try {
+              this.bus.send(
+                this.busName,
+                this.leaderBusName,
+                'tool_failure_loop_escalation',
+                createToolFailureLoopEscalationPayload({
+                  requestId: escalationRequestId,
+                  workerName: this.name,
+                  toolName: name,
+                  argsHash: failureDecision.signature.argsHash,
+                  errorKind: failureDecision.errorKind,
+                  errorCode: failureDecision.signature.errorCode,
+                  count: failureDecision.count,
+                  requiresEscalation: failureDecision.requiresEscalation,
+                  lastErrorMessage: String(result.error || '').split('\n\nLLM_RECOVERY=')[0] || '',
+                }),
+              );
+            } catch {
+              // bus 发送失败不应阻断熔断主路径
+            }
+          }
+          // 失败路径：跳过 PERMISSION_REQUIRED 本地重试（避免 LLM 在已熔断的调用上耗 round）
+          return `ERROR: ${trippedError}`;
+        }
+      }
+
       if (!result.success && String(result.error || '').startsWith('PERMISSION_REQUIRED:')) {
         const approved = await this.requestPermissionFromLeader(name, String(result.error || ''));
         if (approved) {
@@ -1529,6 +1635,54 @@ export class BaseAgent {
     }
   }
 
+  /**
+   * 从 ToolResult.error 文本中提取 LLM_RECOVERY.code（与 createToolError 对齐：error 末尾
+   * 形如 `\n\nLLM_RECOVERY={"code":"...","message":"...",...}`）。若不存在则回退到错误前缀匹配。
+   */
+  protected extractToolErrorCode(errorText: string | undefined): string {
+    const text = String(errorText || '');
+    if (!text) return '';
+    const marker = 'LLM_RECOVERY=';
+    const idx = text.lastIndexOf(marker);
+    if (idx < 0) {
+      // 退化：取首行第一段作为 code（形如 "TOOL_NOT_FOUND: ..."）
+      const firstLine = text.split('\n')[0] || '';
+      const colonIdx = firstLine.indexOf(':');
+      return colonIdx > 0 ? firstLine.slice(0, colonIdx).trim() : firstLine.trim();
+    }
+    const jsonText = text.slice(idx + marker.length).trim();
+    try {
+      const parsed = JSON.parse(jsonText) as { code?: unknown };
+      return typeof parsed?.code === 'string' ? parsed.code : '';
+    } catch {
+      return '';
+    }
+  }
+
+  /**
+   * 将一次工具失败计入 ToolFailureLoopGuard。
+   * 成功路径不需调用（registry 内部有独立 success 跟踪）。
+   */
+  protected recordToolFailure(
+    toolName: string,
+    args: unknown,
+    errorText: string | undefined,
+  ): LoopGuardDecision {
+    const errorCode = this.extractToolErrorCode(errorText);
+    const errorMessage = String(errorText || '').split('\n\nLLM_RECOVERY=')[0] || '';
+    const guard = getToolFailureLoopGuard(this.emitter);
+    return guard.record({
+      sessionId: this.sessionId,
+      agentId: this.agentId,
+      agentName: this.name,
+      taskId: this.currentTaskId || undefined,
+      toolName,
+      args,
+      errorCode,
+      errorMessage,
+    });
+  }
+
   protected recordContextRead(toolName: string, args: unknown, data: unknown): void {
     if (typeof data !== 'string' || data.length === 0) return;
     const a = (args && typeof args === 'object') ? (args as Record<string, unknown>) : {};
@@ -1604,6 +1758,11 @@ export class BaseAgent {
     });
     return new ToolScheduler({
       checkHighPriorityIntervention: async () => {
+        // 权限超时终止检查：shouldTerminate 由 requestPermissionFromLeader 设置
+        if (this.shouldTerminate) {
+          return { done: true, result: '权限审批连续超时，agent 终止' };
+        }
+
         const counts = this.bus.getPendingPriorityCounts(this.busName);
         if (counts.p0 + counts.p1 === 0) {
           return null;
@@ -2719,6 +2878,16 @@ export class BaseAgent {
               await new Promise((resolve) => setTimeout(resolve, waitMs));
               return { type: 'continue' };
             }
+            // 超时错误：不重试，直接 continue 重新请求
+            const concludeClassified = classifyLLMError(error);
+            if (
+              concludeClassified.llmErrorKind === 'request_timeout' ||
+              concludeClassified.llmErrorKind === 'connect_timeout' ||
+              concludeClassified.llmErrorKind === 'stream_timeout'
+            ) {
+              agentLogger.warn(`[${this.name}] Conclude 阶段 LLM 超时 (${concludeClassified.llmErrorKind})，重新请求中...`);
+              return { type: 'continue' };
+            }
             agentLogger.error(`[${this.name}] Conclude 阶段 LLM 调用失败:`, error);
             return { type: 'break', result: this.markTerminalRuntimeOutcome({
               kind: 'recovering',
@@ -3155,6 +3324,30 @@ export class BaseAgent {
             const rawErrorDetail = classified.rawMessage || (error instanceof Error ? error.message : String(error));
             const stackTrace = error instanceof Error ? `\n${error.stack ?? ''}` : '';
 
+            // === 超时错误：LlmGuard 已不重试直接抛出。走 ESC 中断语义：不注入错误消息、
+            // 不累加外层重试计数，直接 repeat 让主循环重新发起 LLM 请求。
+            // CircuitBreaker 已在 LlmGuard 内累积失败计数，持续超时最终熔断走 CircuitOpenError 停下。
+            if (
+              classified.llmErrorKind === 'request_timeout' ||
+              classified.llmErrorKind === 'connect_timeout' ||
+              classified.llmErrorKind === 'stream_timeout'
+            ) {
+              agentLogger.warn(`[${this.name}] LLM 超时 (${errorLabel})，重新请求中...`);
+              this.emitter.emit('agent:status', {
+                agentId: this.agentId,
+                agentName: this.name,
+                sessionId: this.sessionId,
+                status: `⏱️ LLM 超时，重新请求中...`,
+              });
+              // 抢救 partial content
+              const partialTimeout = (error as unknown as Record<string, unknown>).partialContent;
+              if (typeof partialTimeout === 'string' && partialTimeout.trim()) {
+                this.messages.push({ role: 'assistant', content: partialTimeout });
+                agentLogger.info(`[${this.name}] 超时重请求：已抢救 partial content (${partialTimeout.length} chars)`);
+              }
+              return { type: 'repeat' };
+            }
+
             agentLogger.error(`[${this.name}] LLM ${errorLabel}，自动重试中... 完整错误: ${rawErrorDetail}${stackTrace}`);
             await this.logEvent('llm_error', {
               iteration: this.iteration,
@@ -3192,6 +3385,12 @@ export class BaseAgent {
               agentLogger.warn(
                 `[${this.name}] 连续 unknown_error，LlmGuard 内部已重试耗尽，Worker 退出等待 Leader 处理`,
               );
+              // 抢救 partial content：LlmGuard 内部重试时可能已累积部分输出，注入对话历史避免白输
+              const partialUnknown = (error as unknown as Record<string, unknown>).partialContent;
+              if (typeof partialUnknown === 'string' && partialUnknown.trim()) {
+                this.messages.push({ role: 'assistant', content: partialUnknown });
+                agentLogger.info(`[${this.name}] unknown_error 终态：已抢救 partial content (${partialUnknown.length} chars)`);
+              }
               this.llmErrorRetryCount = 0;
               return { type: 'break', result: this.markTerminalRuntimeOutcome({
                 kind: 'recovering',
@@ -3242,6 +3441,12 @@ export class BaseAgent {
               agentLogger.error(
                 `[${this.name}] 外层 LLM 重试已达 ${outerRetry}/${outerMax} 次仍失败 (${errorLabel})，退出等待 Leader 处理`,
               );
+              // 抢救 partial content：LlmGuard 内部重试时可能已累积部分输出
+              const partialExhausted = (error as unknown as Record<string, unknown>).partialContent;
+              if (typeof partialExhausted === 'string' && partialExhausted.trim()) {
+                this.messages.push({ role: 'assistant', content: partialExhausted });
+                agentLogger.info(`[${this.name}] 外层重试耗尽终态：已抢救 partial content (${partialExhausted.length} chars)`);
+              }
               this.emitter.emit('agent:status', {
                 agentId: this.agentId,
                 agentName: this.name,

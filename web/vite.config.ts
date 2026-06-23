@@ -63,6 +63,17 @@ export default defineConfig({
     chunkSizeWarningLimit: 1000,
     minify: buildMinify,
     sourcemap: buildSourcemap,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-react': ['react', 'react-dom', 'zustand'],
+          'vendor-i18n': ['react-i18next', 'i18next'],
+          'vendor-icons': ['lucide-react'],
+          'vendor-virtuoso': ['react-virtuoso'],
+          'vendor-syntax': ['react-syntax-highlighter'],
+        },
+      },
+    },
   },
   server: {
     host: devHost,

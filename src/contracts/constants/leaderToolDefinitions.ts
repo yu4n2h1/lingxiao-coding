@@ -288,6 +288,55 @@ export const LEADER_META_TOOLS: ToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'record_capability_intent',
+      description: '记录当前用户 turn 的 capability intent profile。每个用户 turn 最多调用一次；primaryIntent 只是摘要，grants/denies/requiredGates/constraints 才是 gate 依据。若工具结果提示本轮已记录，必须停止再次调用并直接继续执行用户请求。',
+      parameters: {
+        type: 'object',
+        properties: {
+          primaryIntent: { type: 'string', enum: ['diagnose', 'explain', 'plan', 'implement', 'fix', 'refactor', 'verify', 'operate', 'research'], description: '用户最终目标摘要，不是权限边界。' },
+          scope: {
+            type: 'object',
+            properties: {
+              kind: { type: 'string', enum: ['read_only', 'workspace', 'selected_paths', 'project', 'system', 'external'] },
+              paths: { type: 'array', items: { type: 'string' } },
+              surfaces: { type: 'array', items: { type: 'string' } },
+              taskIds: { type: 'array', items: { type: 'string' } },
+              subsystemIds: { type: 'array', items: { type: 'string' } },
+              externalTargets: { type: 'array', items: { type: 'string' } },
+            },
+            required: ['kind'],
+            additionalProperties: false,
+          },
+          phase: { type: 'string', enum: ['understand', 'design', 'prepare', 'execute', 'verify', 'finalize', 'recover'], description: '当前执行阶段。' },
+          grants: { type: 'array', items: { type: 'string', enum: ['read', 'write', 'shell', 'task', 'dispatch'] }, description: '用户本轮授予的五类粗能力：read=读/搜索/分析/计划；write=写 workspace 文件；shell=命令/git/npm/test/deploy/python/terminal；task=创建/更新任务图；dispatch=派发 worker/agent。' },
+          denies: { type: 'array', items: { type: 'string', enum: ['read', 'write', 'shell', 'task', 'dispatch'] }, description: '用户本轮禁止的五类粗能力；deny 优先于 grant。不要传 no_* 细枚举；所有命令类统一归 shell，派 worker 归 dispatch。' },
+          requiredGates: { type: 'array', items: { type: 'string', enum: ['confirm_before_write', 'confirm_before_command', 'confirm_before_dispatch', 'confirm_before_workflow_apply', 'confirm_before_scope_expansion', 'confirm_before_network', 'confirm_before_git', 'confirm_before_permission_change', 'blueprint_coverage', 'read_before_write', 'verify_after_change'] }, description: '即使具备 grant 也必须先经过的确认/结构化 gate。' },
+          constraints: {
+            type: 'object',
+            properties: {
+              maxRisk: { type: 'string', enum: ['low', 'medium', 'high', 'critical'] },
+              allowedTools: { type: 'array', items: { type: 'string' } },
+              deniedTools: { type: 'array', items: { type: 'string' } },
+              allowedPaths: { type: 'array', items: { type: 'string' } },
+              deniedPaths: { type: 'array', items: { type: 'string' } },
+              commandAllowlist: { type: 'array', items: { type: 'string' } },
+              commandDenylist: { type: 'array', items: { type: 'string' } },
+              mustStayWithinBlueprint: { type: 'boolean' },
+              requireEvidence: { type: 'boolean' },
+            },
+            additionalProperties: false,
+          },
+          confidence: { type: 'number', description: '置信度 0..1。' },
+          reason: { type: 'string', description: '一句话说明判断依据，用户限制必须同时结构化写入 denies/constraints。' },
+        },
+        required: ['primaryIntent', 'scope', 'phase', 'grants', 'denies', 'requiredGates', 'constraints', 'confidence', 'reason'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'create_task',
       description: '任务创建原语：创建单个 OrchestrationNode，派发由 dispatch_agent 执行。DAG 依赖用 blocked_by，验收语义用 contract/evaluation_policy。新建角色附带 role_definition 一步完成。多任务并行须 write_scope 两两正交。参数优先级和分组见各参数 description。',
       parameters: {
@@ -359,7 +408,7 @@ export const LEADER_META_TOOLS: ToolDefinition[] = [
           },
           require_contract: {
             type: 'boolean',
-            description: '可选。是否把 contract_surface 作为派发前硬 gate；实现类任务默认 true，architect/node_kind=contract 默认 false。',
+            description: '可选。是否把 contract_surface 作为派发前硬 gate；仅实现/修复类 contract consumer 默认 true，architect/node_kind=contract 与 evaluate/generic 默认 false。evaluation_policy 不会隐式生成 contract_surface。',
           },
           require_ack: {
             type: 'boolean',
@@ -397,14 +446,14 @@ export const LEADER_META_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'define_project_blueprint',
-      description: '定义项目蓝图:由你自主列出本项目应包含的全部子系统清单(id/名称/范围/角色/状态/依赖),把"做一个完整项目"展开成你规划的模块矩阵。项目级任务(完整产品/系统/前后端应用)开工前先调用本工具;随后为每个 implement 子系统建 create_task(subsystem=<id>)。dispatch 前系统会校验所有 implement 子系统都有任务覆盖——缺口拦截派发,防止规划坍缩成 MVP。子系统清单 100% 由你定义,系统不预设任何模板;要砍掉某个子系统,在该条目标 status=defer/not_applicable 并附 rationale。',
+      description: '定义项目蓝图:由你自主列出本项目应包含的全部子系统清单(id/名称/范围/角色/状态/依赖),把"做一个完整项目"展开成你规划的模块矩阵。项目级任务(完整产品/系统/前后端应用)开工前先调用本工具;随后为每个 implement 子系统建 create_task(subsystem=<id>)。dispatch 前系统会校验所有 implement 子系统都有任务覆盖——缺口拦截派发,防止规划坍缩成 MVP。子系统清单 100% 由你定义,系统不预设任何模板;要砍掉某个子系统,在该条目标 status=defer/not_applicable 并附 rationale。⚠ 硬约束:当 implement 状态的子系统 ≥ 3 个时,必须额外包含一个集成验证子系统(subsystem_id 含 integration-verify 或 integ-verify,如 {subsystem_id:"integration-verify", name:"集成验证", status:"implement", agent_type:"verify"}),否则蓝图校验直接报错。建议该子系统 depends_on 设为所有其它 implement 子系统。',
       parameters: {
         type: 'object',
         properties: {
           subsystems: {
             type: 'array',
             minItems: 1,
-            description: '本项目全部子系统清单。每个子系统的 id/名称/范围由你自定义;不在此列出的子系统不在本项目范围内。',
+            description: '本项目全部子系统清单。每个子系统的 id/名称/范围由你自定义;不在此列出的子系统不在本项目范围内。⚠ 硬约束:当 implement 状态的子系统 ≥ 3 个时,必须额外包含一个集成验证子系统(其 subsystem_id 包含 integration-verify 或 integ-verify,如 {subsystem_id:"integration-verify", name:"集成验证", description:"端到端集成测试与冒烟验证", status:"implement", agent_type:"verify"}),否则蓝图校验会直接报错。建议该子系统 depends_on 设为所有其它 implement 子系统。',
             items: {
               type: 'object',
               properties: {
@@ -466,7 +515,7 @@ export const LEADER_META_TOOLS: ToolDefinition[] = [
           },
           require_contract: {
             type: 'boolean',
-            description: '可选。是否把 contract_surface 作为派发前硬 gate；实现类任务默认 true，architect/node_kind=contract 默认 false。',
+            description: '可选。是否把 contract_surface 作为派发前硬 gate；仅实现/修复类 contract consumer 默认 true，architect/node_kind=contract 与 evaluate/generic 默认 false。evaluation_policy 不会隐式生成 contract_surface。',
           },
           require_ack: {
             type: 'boolean',
@@ -540,6 +589,21 @@ export const LEADER_META_TOOLS: ToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'delete_agent_role',
+      description: '删除 define_agent_role 或 create_task(role_definition) 在当前会话中创建的 runtime 自定义 Agent 角色。不能删除系统预设角色；持久化 custom agent 文件请在 Settings → Roles 删除。若该角色仍被未终态任务引用，默认拒绝，确认后可传 force=true。',
+      parameters: {
+        type: 'object',
+        properties: {
+          role_name: { type: 'string', description: '要删除的 runtime 自定义角色名' },
+          force: { type: 'boolean', description: '可选。角色仍被未终态任务引用时是否强制删除角色定义；默认 false。' },
+        },
+        required: ['role_name'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'list_available_roles',
       description: '列出所有可用的 Agent 角色（预设+自定义）。create_task/update_task 的 agent_type 接受这些规范名，也接受其变体/缩写(如 backend-agents/fe-1/be_dev)并自动归约，无需精确记忆全名。',
       parameters: { type: 'object', properties: {}, required: [] },
@@ -549,7 +613,7 @@ export const LEADER_META_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'dispatch_agent',
-      description: '派发原语：启动一个 Agent 执行已通过 create_task 创建且已经出现在任务板上的单个任务。重要前置条件：team 模式下 dispatch_agent 只能派发当前 active team roster 中尚未忙碌的 member；如果当前没有 active team，系统会自动创建一个包含 leader + 目标 agent 的最小 team（无需手动 team_manage）。不要凭空发明 roster 外名字；新增成员先 team_manage edit/add。多 Agent 编排请先 create_task 建完整 DAG，再对 ready 任务显式 dispatch_agent；同批 create_task 后不能引用模型自造 task_id。',
+      description: '派发原语：启动一个 Agent 执行已通过 create_task 创建且已经出现在任务板上的单个任务。重要前置条件：team 模式下 dispatch_agent 只能派发当前 active team roster 中尚未忙碌的 member；如果当前没有 active team，系统会自动创建一个包含 leader + 目标 agent 的最小 team（无需手动 team_manage）。不要凭空发明 roster 外名字；新增成员先 team_manage edit/add。多 Agent 编排请先 create_task 建完整 DAG，再对 ready 任务显式 dispatch_agent；同批 create_task 后不能引用模型自造 task_id。⚠ 并发限制：系统有最大并发槽位（见每轮「并发概览」的实际槽位数），同时运行的 Agent 数量不能超过此上限。槽位满时 dispatch 会被 skip 并返回"并发槽位已满"错误，请等待运行中 Agent 完成后再重试，或减少同批并行数量。',
       parameters: {
         type: 'object',
         properties: {
@@ -564,7 +628,7 @@ export const LEADER_META_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'dispatch_batch',
-      description: '批量派发原语：一次显式 Leader 工具调用中派发多个已经 ready/dispatchable 的任务。它不自动派发 preferred_agent_name；每一项仍等价于一次 dispatch_agent 校验。Team 模式下每个 agent_name 必须来自当前 active team roster（没有 active team 时系统会自动建团）；Solo 模式下按执行路由策略创建 ephemeral worker。部分成功允许，但结果会逐项返回 ok/skipped/failed。优先把 write_scope 两两正交的 ready 任务批量并行派发（每项一个独立 agent_name）；scope 重叠的任务用 blocked_by 串行，不要同批并行以免撞写。',
+      description: '批量派发原语：一次显式 Leader 工具调用中派发多个已经 ready/dispatchable 的任务。它不自动派发 preferred_agent_name；每一项仍等价于一次 dispatch_agent 校验。Team 模式下每个 agent_name 必须来自当前 active team roster（没有 active team 时系统会自动建团）；Solo 模式下按执行路由策略创建 ephemeral worker。部分成功允许，但结果会逐项返回 ok/skipped/failed。优先把 write_scope 两两正交的 ready 任务批量并行派发（每项一个独立 agent_name）；scope 重叠的任务用 blocked_by 串行，不要同批并行以免撞写。⚠ 并发限制：同批 dispatch 数量 + 当前运行中 Agent 数量不能超过最大并发槽位（见每轮「并发概览」的实际槽位数）。超出部分会被 skip 并返回"并发槽位已满"错误。建议：先查当前并发概览确认可用空槽数，再按空槽数量安排同批派发，剩余任务等槽位释放后再派。',
       parameters: {
         type: 'object',
         properties: {
@@ -904,8 +968,20 @@ description: '提交当前的完整执行方案。行为取决于控制模式（
   {
     type: 'function',
     function: {
+      name: 'list_runtime_agents',
+      description: '列出当前 AgentPool 中所有 runtime agents（running/stopped、taskId、角色、最近心跳/进展、恢复失败计数）。用于在调用 check_agent_progress / retry / terminate 前确认真实 agent 名和运行态，避免拿过期 agent 名反复撞错。只读，不唤醒、不重试、不派发。',
+      parameters: {
+        type: 'object',
+        properties: {},
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'check_agent_progress',
-      description: '查看正在运行中的某个Agent的最近动作和详细日志。仅在以下情况使用：(1) 系统报告Agent异常、停滞或 watchdog 告警；(2) 长期无任何进度通知且需要判断是否干预；(3) 需要验收完成结果或用户明确询问当前进度。\n\n【等待原则】如果 Agent 最近仍有活动或正在执行工具，不要调用本工具做例行确认；等待 task_complete/failed/watchdog_alert 等自然信号。\n\n【限速原则】对同一Agent每60秒最多调用一次。调用后若Agent仍在正常运行，结束本轮等待自然完成信号。不要用前台 sleep、重复 read_work_notes、team_inbox 或文件树扫描来制造观察窗口；频繁查询对Agent执行无加速作用，只消耗 token。',
+      description: '查看当前 active Agent 的最近动作和详细日志。仅在以下情况使用：(1) 系统报告Agent异常、停滞或 watchdog 告警；(2) 长期无任何进度通知且需要判断是否干预；(3) 需要验收完成结果或用户明确询问当前进度。\n\n【先列后查】如果 agent_name 来自恢复报告、旧上下文或不确定是否仍存在，必须先调用 list_runtime_agents 获取当前真实 agent 名和运行态；只有目标仍在当前 runtime agents 中且 active 时才调用本工具。目标不存在时不要拿旧名反复调用。\n\n【等待原则】如果 Agent 最近仍有活动或正在执行工具，不要调用本工具做例行确认；等待 task_complete/failed/watchdog_alert 等自然信号。\n\n【限速原则】对同一Agent每60秒最多调用一次。调用后若Agent仍在正常运行，结束本轮等待自然完成信号。不要用前台 sleep、重复 read_work_notes、team_inbox 或文件树扫描来制造观察窗口；频繁查询对Agent执行无加速作用，只消耗 token。',
       parameters: {
         type: 'object',
         properties: {
@@ -1025,7 +1101,7 @@ description: '提交当前的完整执行方案。行为取决于控制模式（
     type: 'function',
     function: {
       name: 'terminate_agent',
-      description: '完全终止指定 Agent（不可恢复，丢弃进度）。硬性要求：调用前必须先对同一 Agent 调用 check_agent_progress，并基于检查结果确认无进展、工具卡死、心跳丢失或破坏性行为；禁止只根据 task_board、DAG、运行时间、主观“卡住”判断终止。优先使用 nudge_agent / retry_agent_llm / intervene_agent。仅在 Agent 严重偏离目标、产生破坏性操作，或 check_agent_progress 明确显示不可继续时使用。',
+      description: '完全终止指定 Agent（不可恢复，丢弃进度）。仅在 Agent 严重偏离目标、产生破坏性操作或不可恢复时使用。优先使用 nudge_agent / retry_agent_llm / intervene_agent。',
       parameters: {
         type: 'object',
         properties: {

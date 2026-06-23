@@ -15,7 +15,7 @@ A .docx file is a ZIP archive containing XML files.
 | Task | Approach |
 |------|----------|
 | Read/analyze content | `pandoc` or unpack for raw XML |
-| Create new document | Use `docx-js` - see Creating New Documents below |
+| Create new document | Prefer LingXiao `generate_docx` (project-bundled npm package `docx`) - see Creating New Documents below |
 | Edit existing document | Unpack → edit XML → repack - see Editing Existing Documents below |
 
 ### Converting .doc to .docx
@@ -55,7 +55,7 @@ python scripts/accept_changes.py input.docx output.docx
 
 ## Creating New Documents
 
-Generate .docx files with JavaScript, then validate. Install: `npm install -g docx`
+Generate .docx files with LingXiao `generate_docx` by default. It uses the project-bundled npm package `docx`; do not ask the user to install a global package for normal LingXiao generation. For standalone external scripts, use JavaScript with `docx`, then validate.
 
 ### Setup
 ```javascript
@@ -80,7 +80,7 @@ python scripts/office/validate.py doc.docx
 ### Page Size
 
 ```javascript
-// CRITICAL: docx-js defaults to A4, not US Letter
+// CRITICAL: the docx package defaults can vary; set page size explicitly
 // Always set page size explicitly for consistent results
 sections: [{
   properties: {

@@ -53,6 +53,7 @@ import {
   confirmIntervention as agentConfirmIntervention,
   terminateAgent as agentTerminate,
   checkAgentProgress as agentCheckProgress,
+  listRuntimeAgents as agentListRuntimeAgents,
 } from './leader/tools/LeaderAgentControlTools.js';
 import {
   type TaskPlanningContext,
@@ -60,6 +61,7 @@ import {
   updateTask as planUpdateTask,
   deleteTask as planDeleteTask,
   defineAgentRole as planDefineAgentRole,
+  deleteAgentRole as planDeleteAgentRole,
   defineProjectBlueprint as planDefineProjectBlueprint,
   listAvailableRoles as planListAvailableRoles,
   updateTaskStatus as planUpdateTaskStatus,
@@ -68,6 +70,7 @@ import {
   validateDispatchAgentName as gateValidateDispatchAgentName,
   formatRoster as gateFormatRoster,
   isLeaderExecutionTool as gateIsLeaderExecutionTool,
+  evaluateLeaderAutonomyToolGate,
 } from './leader/LeaderToolGates.js';
 import { LeaderToolFailure, fail, type DispatchItemStatus } from './leader/LeaderToolFailure.js';
 import { getTeamMailbox, getTeamMemberRegistry } from '../core/TeamMailbox.js';
@@ -75,6 +78,8 @@ import { MemoryManager, type MemoryScope, type MemoryType } from '../memory/Memo
 import { resolveModeRuntimeProjection, type ModeRuntimeProjection } from '../core/ModeRuntimeProjection.js';
 import { readPersistedEternalGoal } from '../core/EternalGoal.js';
 import { getPromptCatalog } from './prompts/i18n/catalog.js';
+import { normalizeCapabilityIntentProfile } from './IntentClassifier.js';
+import type { LeaderAutonomyToolGateResult } from './leader/LeaderToolGates.js';
 import { collectPrimitiveLeaves } from '../tools/Registry.js';
 
 /**
@@ -375,6 +380,67 @@ export class LeaderToolsExecutor {
     };
   }
 
+  private readCurrentUserTurnId(): number {
+    const raw = this.leader.db.getSessionState(this.leader.sessionId, SESSION_KEYS.CURRENT_USER_TURN_ID);
+    const parsed = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
+    return Number.isFinite(parsed) && parsed >= 0 ? Math.trunc(parsed) : 0;
+  }
+
+  private readRecordedCapabilityIntentTurnId(): number | null {
+    const raw = this.leader.db.getSessionState(this.leader.sessionId, SESSION_KEYS.CAPABILITY_INTENT_TURN_ID);
+    const parsed = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN;
+    return Number.isFinite(parsed) && parsed >= 0 ? Math.trunc(parsed) : null;
+  }
+
+  private recordCapabilityIntent(args: Record<string, unknown>): string {
+    const currentTurnId = this.readCurrentUserTurnId();
+    const recordedTurnId = this.readRecordedCapabilityIntentTurnId();
+    if (currentTurnId > 0 && recordedTurnId === currentTurnId) {
+      const existing = this.leader.db.getSessionState(this.leader.sessionId, SESSION_KEYS.CAPABILITY_INTENT_PROFILE);
+      return `本轮 capability intent profile 已记录为 ${compactOneLine(existing, 120)}；不要再次调用 record_capability_intent，请直接继续执行用户请求。`;
+    }
+
+    const now = Date.now();
+    const profile = normalizeCapabilityIntentProfile(args, {
+      turnId: currentTurnId || null,
+      now,
+      source: 'record_capability_intent',
+    });
+    if (!profile) {
+      return 'ERROR: record_capability_intent 参数无效：必须提供合法 primaryIntent/scope/phase/grants/denies/requiredGates/constraints/confidence/reason。';
+    }
+    this.leader.db.setSessionState(this.leader.sessionId, SESSION_KEYS.CAPABILITY_INTENT_PROFILE, JSON.stringify(profile));
+    if (currentTurnId > 0) {
+      this.leader.db.setSessionState(this.leader.sessionId, SESSION_KEYS.CAPABILITY_INTENT_TURN_ID, currentTurnId);
+    }
+    this.leader.emitter.emit('leader:capability_intent', {
+      sessionId: this.leader.sessionId,
+      profile,
+    });
+    return `已记录 capability intent profile：${profile.primaryIntent}/${profile.phase}/${profile.scope.kind} (confidence=${profile.confidence.toFixed(2)}) — ${profile.reason}\n现在继续执行用户请求；本轮不要再次调用 record_capability_intent。`;
+  }
+
+  private recordAutonomyDecision(toolName: string, gate: LeaderAutonomyToolGateResult): void {
+    const gateResult = gate.ok
+      ? 'allow'
+      : gate.gateKind === 'confirmation_required'
+        ? 'confirmation_required'
+        : 'blocked';
+    const trace = {
+      toolName,
+      decision: gate.decision,
+      gateResult,
+      gateKind: gate.ok ? null : gate.gateKind,
+      recordedAt: Date.now(),
+      source: 'leader_tool_gate',
+    };
+    this.leader.db.setSessionState(this.leader.sessionId, SESSION_KEYS.AUTONOMY_DECISION_TRACE, JSON.stringify(trace));
+    this.leader.emitter.emit('leader:autonomy_decision', {
+      sessionId: this.leader.sessionId,
+      ...trace,
+    });
+  }
+
   /**
    * 执行元工具
    *
@@ -386,6 +452,27 @@ export class LeaderToolsExecutor {
    *   - bughunt ledger 元工具（直接读写 BughuntLedger 内存表）
    */
   async execute(name: string, args: Record<string, unknown>): Promise<string> {
+    if (name === 'record_capability_intent') {
+      return this.recordCapabilityIntent(args);
+    }
+
+    const autonomyGate = evaluateLeaderAutonomyToolGate({
+      toolName: name,
+      args,
+      modes: resolveModeRuntimeProjection({
+        sessionId: this.leader.sessionId,
+        db: this.leader.db,
+        blackboardAvailable: this.leader.isBlackboardEnabled(),
+        permissionContext: this.leader.getPermissionContext(),
+        permissionSummary: this.leader.getInteractionSnapshot().permissionSummary,
+      }),
+      permissionContext: this.leader.getPermissionContext(),
+    });
+    this.recordAutonomyDecision(name, autonomyGate);
+    if (!autonomyGate.ok) {
+      return `ERROR: ${autonomyGate.message}`;
+    }
+
     const ctx = this.getAgentControlContext();
     const planCtx = this.getTaskPlanningContext();
     switch (name) {
@@ -397,6 +484,8 @@ export class LeaderToolsExecutor {
         return await planDeleteTask(planCtx, args);
       case 'define_agent_role':
         return await planDefineAgentRole(planCtx, args);
+      case 'delete_agent_role':
+        return planDeleteAgentRole(planCtx, args);
       case 'define_project_blueprint':
         return await planDefineProjectBlueprint(planCtx, args);
       case 'list_available_roles':
@@ -447,6 +536,8 @@ export class LeaderToolsExecutor {
         return await this.finishSession(args);
       case 'complete_eternal_goal':
         return await this.completeEternalGoal(args);
+      case 'list_runtime_agents':
+        return await agentListRuntimeAgents(ctx, args);
       case 'check_agent_progress':
         return await agentCheckProgress(ctx, args);
       case 'learn_soul':
@@ -687,7 +778,22 @@ export class LeaderToolsExecutor {
           },
     });
     if (!dispatched) {
-      const reason = this.leader.board.getBlockedReason(task) ?? '并发预算已满、任务状态变化或依赖/契约未就绪';
+      // 优先使用 scheduler 的精确拒绝原因
+      const schedulerReason = scheduler.getLastRejectReason?.();
+      if (schedulerReason) {
+        throw fail(`调度器拒绝派发任务 ${taskId}：${schedulerReason}`, 'skipped');
+      }
+      // 兜底：区分"槽位已满"与"任务状态变化/依赖未就绪"
+      const cap = scheduler.getCapacityInfo();
+      const blockedReason = this.leader.board.getBlockedReason(task);
+      if (cap.available === 0) {
+        throw fail(
+          `并发槽位已满（${cap.running}/${cap.max}），任务 ${taskId} 暂时无法派发。` +
+          `请等待正在运行的 Agent 完成后再重试，或减少同批 dispatch_batch 的并行数量。`,
+          'skipped',
+        );
+      }
+      const reason = blockedReason ?? '任务状态变化或依赖/契约未就绪';
       throw fail(`调度器拒绝派发任务 ${taskId}（${reason}）`, 'skipped');
     }
     // Record real usage so distill's C gate can later refine proven agents (N5-A).

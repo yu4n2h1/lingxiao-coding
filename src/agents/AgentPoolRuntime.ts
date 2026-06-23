@@ -276,6 +276,8 @@ export interface AgentHandle {
   lastToolResultAt?: number;
   /** Current tool being executed (null if not in tool) */
   currentToolName?: string | null;
+  /** Brief preview of the last tool result (truncated, for Leader runtime state injection) */
+  lastToolResultPreview?: string;
   /** Whether agent is waiting for permission approval */
   pendingPermission?: boolean;
   toolCalls?: number;
@@ -468,10 +470,23 @@ export class AgentPool {
     });
   }
 
+  /**
+   * Update the default model used for subsequently spawned Worker/Agent LLM requests.
+   * Running workers keep their current request; this is a hot switch for the next dispatch/respawn.
+   */
+  setModel(modelId: string): void {
+    this.model = modelId;
+  }
+
+  getModel(): string {
+    return this.model;
+  }
+
   private buildWorkerFailureDiagnostics(
     handle: AgentHandle,
     runnerDiagnostics?: WorkerProcessDiagnostics,
   ): WorkerRecoveryPayload['diagnostics'] {
+
     const diagnostics = runnerDiagnostics ?? this.workerRunner.getWorkerDiagnostics(handle.name);
     if (!diagnostics && !handle.error) return undefined;
     return {
@@ -999,7 +1014,7 @@ export class AgentPool {
       handle,
       task,
       role,
-      agentModel: globalConfig.llm.agent_model,
+      agentModel: this.model,
       maxIterations: AGENT_MAX_ITERATIONS,
       maxRuntimeMinutes: AGENT_MAX_RUNTIME_MINUTES,
       getBlackboardSnapshot: this._blackboardGetSnapshot,
@@ -1480,6 +1495,12 @@ export class AgentPool {
   }
 
   protected markAgentFailed(handle: AgentHandle, error: Error, source = 'runtime'): void {
+    // 先 kill 子进程，再设状态——forceStopAgent 只设内存状态不终止进程
+    try {
+      this.workerRunner.killWorker(handle.name, `agent failed: ${error.message}`);
+    } catch (killErr) {
+      agentLogger.warn(`[AgentPool] killWorker during markAgentFailed failed (${handle.name}): ${killErr instanceof Error ? killErr.message : String(killErr)}`);
+    }
     this.forceStopAgent(handle, 'failed', error.message);
     handle.error = error;
     handle.interactiveRuntime?.setStatus('failed');
@@ -1910,6 +1931,7 @@ export class AgentPool {
 
   destroy(): void {
     this.stopAll();
+    this.eventBinder.dispose();
     for (const unsubscribe of this.interactiveStateUnsubscribers) {
       unsubscribe();
     }

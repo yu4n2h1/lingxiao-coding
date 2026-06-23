@@ -22,7 +22,7 @@ import {
 
 const PROJECT_CACHE_TTL_MS = Number(process.env.LINGXIAO_PROJECT_CONTRACT_CACHE_TTL_MS || 5_000);
 
-const projectContractsCache = new Map<string, { mtimeMs: number; createdAt: number; entries: ContractPackEntry[] }>();
+const projectContractsCache = new Map<string, { mtimeMs: number; ctimeMs: number; size: number; createdAt: number; entries: ContractPackEntry[] }>();
 
 function isValidEntry(raw: unknown): raw is ContractPackEntry {
   if (!raw || typeof raw !== 'object') return false;
@@ -34,20 +34,26 @@ function isValidEntry(raw: unknown): raw is ContractPackEntry {
 
 /**
  * 从项目级 `.lingxiao/contracts/contract-pack.json` 加载契约 entries(跨会话复用)。
- * stat-mtime + 5s TTL 缓存:文件未变且未过期则复用。容错:缺失/损坏/格式错返回 []。
+ * 文件签名(mtime/ctime/size) + 5s TTL 缓存:文件未变且未过期则复用。容错:缺失/损坏/格式错返回 []。
  */
 export function loadProjectContractEntries(workspace?: string): ContractPackEntry[] {
   const path = getProjectContractPackPath(workspace);
   if (!existsSync(path)) return [];
-  let mtimeMs: number;
+  let signature: { mtimeMs: number; ctimeMs: number; size: number };
   try {
-    mtimeMs = statSync(path).mtimeMs;
+    const stat = statSync(path);
+    signature = { mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, size: stat.size };
   } catch {
+    projectContractsCache.delete(path);
     return [];
   }
   const cached = projectContractsCache.get(path);
   const now = Date.now();
-  if (cached && cached.mtimeMs === mtimeMs && now - cached.createdAt < PROJECT_CACHE_TTL_MS) {
+  if (cached
+    && cached.mtimeMs === signature.mtimeMs
+    && cached.ctimeMs === signature.ctimeMs
+    && cached.size === signature.size
+    && now - cached.createdAt < PROJECT_CACHE_TTL_MS) {
     return cached.entries;
   }
   try {
@@ -57,7 +63,7 @@ export function loadProjectContractEntries(workspace?: string): ContractPackEntr
     const entriesRaw = (parsed as Record<string, unknown>).entries;
     if (!Array.isArray(entriesRaw)) return [];
     const entries = entriesRaw.filter(isValidEntry);
-    projectContractsCache.set(path, { mtimeMs, createdAt: now, entries });
+    projectContractsCache.set(path, { ...signature, createdAt: now, entries });
     return entries;
   } catch {
     return [];

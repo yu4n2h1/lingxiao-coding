@@ -77,6 +77,19 @@ type GatewayQuotaBucket = {
 
 const quotaBuckets = new Map<string, GatewayQuotaBucket>();
 
+// ── 运行时网关端点（进程绑定后由 startLocalLlmGatewayServer 设置）──
+// 替代旧的 gateway.json 共享复用机制：每个进程自己绑定随机端口，
+// 启动后把实际 host:port 写入此变量，resolveLocalLlmGateway() 优先读取。
+let _runtimeGatewayEndpoint: { host: string; port: number } | null = null;
+
+export function setRuntimeGatewayEndpoint(host: string, port: number): void {
+  _runtimeGatewayEndpoint = { host: normalizeHost(host), port };
+}
+
+export function clearRuntimeGatewayEndpoint(): void {
+  _runtimeGatewayEndpoint = null;
+}
+
 export function normalizeHost(host: string): string {
   if (!host || host === '0.0.0.0' || host === '::') return '127.0.0.1';
   if (host === 'localhost') return '127.0.0.1';
@@ -186,9 +199,10 @@ export function resolveLocalLlmGateway(): LocalLlmGatewayResolved | null {
   const model = getModelManager().getModelByIdStrict(modelId);
   const apiModel = model.model || modelId;
   const token = ensureGatewayToken();
-  // 网关在专用固定端口上监听（llm_gateway.host/port），地址不再随 Web 服务器端口文件漂移。
-  const host = normalizeHost(String(getConfigValue('llm_gateway.host') || '127.0.0.1'));
-  const port = readPositiveInt('llm_gateway.port', 62000);
+  // 网关端口：优先用运行时绑定的实际端口（随机分配），
+  // 回退到配置端口（用于未启动时显示默认地址或外部直连场景）。
+  const host = _runtimeGatewayEndpoint?.host || normalizeHost(String(getConfigValue('llm_gateway.host') || '127.0.0.1'));
+  const port = _runtimeGatewayEndpoint?.port || readPositiveInt('llm_gateway.port', 62000);
   const origin = `http://${host}:${port}`;
 
   return {
