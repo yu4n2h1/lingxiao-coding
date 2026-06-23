@@ -289,7 +289,7 @@ export const LEADER_META_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'record_capability_intent',
-      description: '记录当前用户 turn 的 capability intent profile。每个用户 turn 最多调用一次；primaryIntent 只是摘要，grants/denies/requiredGates/constraints 才是 gate 依据。若工具结果提示本轮已记录，必须停止再次调用并直接继续执行用户请求。',
+      description: '【每用户 turn 最多一次·意图记录非权限开关】记录当前用户 turn 的 capability intent profile。这是意图记录（给后续 Agent / 审计看的），不是权限开关；真正能不能调用由运行时权限系统决定。primaryIntent 只是摘要，grants/denies/requiredGates/constraints 才是 gate 依据。若工具结果提示本轮已记录，必须停止再次调用并直接继续执行用户请求。',
       parameters: {
         type: 'object',
         properties: {
@@ -710,7 +710,7 @@ export const LEADER_META_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'force_complete_task',
-      description: '强制完成团队成员的任务。仅在 Agent 长时间无进展、陷入循环或偏离目标时使用。这是 Leader 的监督职责，但应谨慎使用，给予 Agent 充分机会后再干预。',
+      description: '【任务级强制完成·谨慎】标记任务为已完成（UNVERIFIED），无论 Agent 实际状态。目标对象：任务节点。仅用于 Agent 长期无进展、陷入循环或偏离目标。与 terminate_agent 的区别：force_complete 标记任务完成，terminate 终止 Agent 实例。给予充分时间后再使用。',
       parameters: {
         type: 'object',
         properties: {
@@ -740,7 +740,7 @@ export const LEADER_META_TOOLS: ToolDefinition[] = [
     type: 'function',
     function: {
       name: 'nudge_agent',
-      description: '向卡住的 Agent 发送干预提示，Agent 收到后将提示注入 system prompt 并改变策略。适用于 Agent 陷入循环、方向错误或长期无进展时。',
+      description: '【干预级别2/4】向 Agent 注入提示让其自主调整策略（不暂停）。适用于方向偏离、陷入循环或长期无进展。提示会进入 system prompt，Agent 继续运行。升级路径：pause < nudge < intervene+confirm < terminate。',
       parameters: {
         type: 'object',
         properties: {
@@ -981,7 +981,7 @@ description: '提交当前的完整执行方案。行为取决于控制模式（
     type: 'function',
     function: {
       name: 'check_agent_progress',
-      description: '查看当前 active Agent 的最近动作和详细日志。仅在以下情况使用：(1) 系统报告Agent异常、停滞或 watchdog 告警；(2) 长期无任何进度通知且需要判断是否干预；(3) 需要验收完成结果或用户明确询问当前进度。\n\n【先列后查】如果 agent_name 来自恢复报告、旧上下文或不确定是否仍存在，必须先调用 list_runtime_agents 获取当前真实 agent 名和运行态；只有目标仍在当前 runtime agents 中且 active 时才调用本工具。目标不存在时不要拿旧名反复调用。\n\n【等待原则】如果 Agent 最近仍有活动或正在执行工具，不要调用本工具做例行确认；等待 task_complete/failed/watchdog_alert 等自然信号。\n\n【限速原则】对同一Agent每60秒最多调用一次。调用后若Agent仍在正常运行，结束本轮等待自然完成信号。不要用前台 sleep、重复 read_work_notes、team_inbox 或文件树扫描来制造观察窗口；频繁查询对Agent执行无加速作用，只消耗 token。',
+      description: '【限速：每 Agent 每 60s 最多一次】查看当前 active Agent 的最近动作和详细日志。仅在以下情况使用：(1) 系统报告 Agent 异常、停滞或 watchdog 告警；(2) 长期无任何进度通知且需要判断是否干预；(3) 需要验收完成结果或用户明确询问当前进度。\n\n【先列后查】如果 agent_name 来自恢复报告、旧上下文或不确定是否仍存在，必须先调用 list_runtime_agents 获取当前真实 agent 名和运行态；只有目标仍在当前 runtime agents 中且 active 时才调用本工具。目标不存在时不要拿旧名反复调用。\n\n【等待原则】如果 Agent 最近仍有活动或正在执行工具，不要调用本工具做例行确认；等待 task_complete/failed/watchdog_alert 等自然信号。调用后若 Agent 仍在正常运行，结束本轮等待自然完成信号。不要用前台 sleep、重复 read_work_notes、team_inbox 或文件树扫描来制造观察窗口；频繁查询对 Agent 执行无加速作用，只消耗 token。',
       parameters: {
         type: 'object',
         properties: {
@@ -995,7 +995,7 @@ description: '提交当前的完整执行方案。行为取决于控制模式（
     type: 'function',
     function: {
       name: 'learn_soul',
-      description: '[已废弃] 记忆便捷写入，等价于 memory(action="save", content=..., scope=...)。保留仅为向后兼容，新代码请直接用 memory 工具。底层调用同一个 MemoryManager，写入路径：project=.lingxiao/memory/ 或 user=~/.lingxiao/memory/。',
+      description: '【已废弃·新代码禁用】记忆便捷写入，等价于 memory(action="save", content=..., scope=...)。保留仅为向后兼容，新代码请直接用 memory 工具。底层调用同一个 MemoryManager，写入路径：project=.lingxiao/memory/ 或 user=~/.lingxiao/memory/。',
       parameters: {
         type: 'object',
         properties: {
@@ -1058,7 +1058,7 @@ description: '提交当前的完整执行方案。行为取决于控制模式（
     type: 'function',
     function: {
       name: 'pause_agent',
-      description: '暂停指定 Agent（保留进度，可随时恢复）。适用于需要临时释放资源或等待外部条件时。',
+      description: '【干预级别1/4】暂停 Agent 并保留进度，可用 resume_agent 恢复。适用于等待外部条件或临时释放资源。不改变指令，只暂停执行。升级路径：pause < nudge < intervene+confirm < terminate。',
       parameters: {
         type: 'object',
         properties: {
@@ -1072,7 +1072,7 @@ description: '提交当前的完整执行方案。行为取决于控制模式（
     type: 'function',
     function: {
       name: 'resume_agent',
-      description: '恢复暂停的 Agent 继续执行。',
+      description: '【干预闭环】恢复 pause_agent 暂停的 Agent，让其从暂停点继续执行。',
       parameters: {
         type: 'object',
         properties: {
@@ -1086,7 +1086,7 @@ description: '提交当前的完整执行方案。行为取决于控制模式（
     type: 'function',
     function: {
       name: 'intervene_agent',
-      description: '干预指定 Agent：停下来，注入指令，等待用户确认后再继续。适用于需要 Agent 改变方向但不想终止时。',
+      description: '【干预级别3/4】停止 Agent、注入指令、等待你调用 confirm_intervention 后才继续执行。与 nudge 的区别：intervene 会暂停并等待确认，nudge 不暂停。调用后必须再调 confirm_intervention 才能让 Agent 继续。升级路径：pause < nudge < intervene+confirm < terminate。',
       parameters: {
         type: 'object',
         properties: {
@@ -1101,7 +1101,7 @@ description: '提交当前的完整执行方案。行为取决于控制模式（
     type: 'function',
     function: {
       name: 'terminate_agent',
-      description: '完全终止指定 Agent（不可恢复，丢弃进度）。仅在 Agent 严重偏离目标、产生破坏性操作或不可恢复时使用。优先使用 nudge_agent / retry_agent_llm / intervene_agent。',
+      description: '【干预级别4/4·不可逆】完全终止 Agent 并丢弃进度（不可恢复）。目标对象：Agent 实例。仅用于严重偏离、破坏性操作或无法修正。优先使用 nudge / retry / intervene。与 force_complete_task 的区别：terminate 终止 Agent，force_complete 标记任务为完成。升级路径：pause < nudge < intervene+confirm < terminate。',
       parameters: {
         type: 'object',
         properties: {
@@ -1116,7 +1116,7 @@ description: '提交当前的完整执行方案。行为取决于控制模式（
     type: 'function',
     function: {
       name: 'confirm_intervention',
-      description: '确认干预，让已收到干预指令的 Agent 带着新指令继续执行。',
+      description: '【干预闭环】确认 intervene_agent 注入的指令，让 Agent 带着新指令继续执行。必须在 intervene_agent 之后调用，否则 Agent 会一直等待。',
       parameters: {
         type: 'object',
         properties: {

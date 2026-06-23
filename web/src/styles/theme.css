@@ -973,22 +973,33 @@ a:hover {
 }
 
 .codex-topbar {
-  /* 顶栏：移除旧金色流云，保持克制玻璃层，让背景图作为主视觉。 */
-  background: color-mix(in srgb, #ffffff 84%, var(--color-bg-primary));
-  border-bottom-color: color-mix(in srgb, var(--color-border-default) 72%, transparent);
+  /* Light 顶栏：温润玉质感 + 淡金点缀 */
+  background: 
+    linear-gradient(180deg, 
+      color-mix(in srgb, var(--lingxiao-jade-soft) 68%, #ffffff),
+      color-mix(in srgb, var(--lingxiao-jade-soft) 42%, #ffffff)
+    ),
+    color-mix(in srgb, #ffffff 92%, var(--lingxiao-cloud));
+  border-bottom-color: color-mix(in srgb, var(--lingxiao-jade-deep) 18%, transparent);
   box-shadow:
-    inset 0 -1px 0 color-mix(in srgb, var(--lingxiao-glass-highlight) 54%, transparent),
-    0 10px 26px rgba(39, 60, 58, 0.055);
+    inset 0 -1px 0 color-mix(in srgb, var(--lingxiao-sword) 12%, transparent),
+    0 4px 16px rgba(138, 101, 31, 0.08),
+    0 1px 4px rgba(138, 101, 31, 0.06);
 }
 
 [data-theme="dark"] .codex-topbar {
+  /* Dark 顶栏：墨底青锋，深邃有神 */
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--color-bg-secondary) 52%, transparent), color-mix(in srgb, var(--color-bg-primary) 72%, transparent)),
-    color-mix(in srgb, var(--color-bg-primary) 58%, transparent);
-  border-bottom-color: color-mix(in srgb, var(--color-border-muted) 72%, transparent);
+    linear-gradient(180deg, 
+      color-mix(in srgb, var(--lingxiao-ink) 28%, var(--color-bg-secondary)),
+      color-mix(in srgb, var(--lingxiao-ink) 18%, var(--color-bg-primary))
+    ),
+    color-mix(in srgb, var(--lingxiao-ink) 42%, var(--color-bg-primary));
+  border-bottom-color: color-mix(in srgb, var(--lingxiao-jade) 24%, var(--color-border-muted));
   box-shadow:
-    inset 0 -1px 0 color-mix(in srgb, var(--lingxiao-glass-highlight) 26%, transparent),
-    0 10px 26px rgba(0, 0, 0, 0.22);
+    inset 0 -1px 0 color-mix(in srgb, var(--lingxiao-jade) 16%, transparent),
+    0 6px 20px rgba(95, 224, 199, 0.06),
+    0 2px 8px rgba(23, 32, 37, 0.4);
 }
 
 .chat-composer-area {
