@@ -75,7 +75,22 @@ export default function BrowserDock({ workspaceName, onInsertPrompt, onSendPromp
   const [htmlEditContent, setHtmlEditContent] = useState('');
   const [jsInput, setJsInput] = useState('');
   const [evalResult, setEvalResult] = useState<string | null>(null);
-  const [clickRipple, setClickRipple] = useState<{ x: number; y: number } | null>(null);
+  const [clickRipple, setClickRipple] = useState<{ x: number; y: number } | null>(null);  const [inputText, setInputText] = useState('');
+  const [inputMode, setInputMode] = useState(false);
+  const [lastClickPos, setLastClickPos] = useState<{ x: number; y: number } | null>(null);
+
+  // v1.0.5: 键盘输入
+  const { typeText, pressKey, typeAt } = useBrowserStore();
+
+  const submitInput = async () => {
+    if (!inputText || !session) return;
+    if (lastClickPos) {
+      await typeAt(lastClickPos.x, lastClickPos.y, inputText);
+    } else {
+      await typeText(inputText);
+    }
+    setInputText('');
+  };
 
   useEffect(() => {
     void loadHealth(false);
@@ -119,6 +134,7 @@ export default function BrowserDock({ workspaceName, onInsertPrompt, onSendPromp
       // 真实点击!
       setClickRipple({ x: event.clientX - rect.left, y: event.clientY - rect.top });
       setTimeout(() => setClickRipple(null), 600);
+      setLastClickPos({ x, y });
       void clickAt(x, y);
     }
   };
@@ -330,6 +346,34 @@ export default function BrowserDock({ workspaceName, onInsertPrompt, onSendPromp
 
       <div className={`browser-workspace ${selection ? 'has-selection' : ''}`}>
         <div className="browser-preview-column">
+          {/* v1.0.5: iframe 实时模式 — 原生体验 */}
+          {session && session.url && session.url !== 'about:blank' ? (
+            <div className="browser-iframe-container">
+              <iframe
+                key={session.id + session.url}
+                src={session.url}
+                className="browser-iframe"
+                title={session.title || session.url}
+                sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
+                allow="fullscreen"
+              />
+              {/* 检视模式叠加层 */}
+              {interactionMode === 'inspect' || isInspecting ? (
+                <div
+                  className="browser-inspect-overlay"
+                  onClick={handleViewportClick}
+                  style={{ cursor: 'crosshair' }}
+                >
+                  {isLoading && (
+                    <div className="browser-loading-overlay">
+                      <Loader2 size={20} className="animate-spin" />
+                    </div>
+                  )}
+                </div>
+              ) : null}
+            </div>
+          ) : (
+          /* 截图回退模式 */
           <div
             className={`browser-viewport ${interactionMode === 'inspect' || isInspecting ? 'is-inspecting' : 'is-clickable'}`}
             onClick={handleViewportClick}
@@ -368,6 +412,7 @@ export default function BrowserDock({ workspaceName, onInsertPrompt, onSendPromp
               </div>
             )}
           </div>
+          )}
           {session && (
             <div className="browser-page-meta">
               <span className="truncate">{session.title || 'Untitled'}</span>

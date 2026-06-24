@@ -155,12 +155,36 @@ export const browserClient = {
 
   async fill(sessionId: string, selector: string, value: string): Promise<{ ok: true }> {
     const res = await fetch(`/api/v1/browser/sessions/${encodeURIComponent(sessionId)}/fill`, {
-      method: 'POST',
-      headers: apiHeaders({ 'Content-Type': 'application/json' }),
+      method: 'POST', headers: apiHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ selector, value }),
     });
     return readJson(res);
   },
+
+  async type(sessionId: string, text: string): Promise<{ ok: true }> {
+    const res = await fetch(`/api/v1/browser/sessions/${encodeURIComponent(sessionId)}/type`, {
+      method: 'POST', headers: apiHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ text }),
+    });
+    return readJson(res);
+  },
+
+  async press(sessionId: string, key: string): Promise<{ ok: true }> {
+    const res = await fetch(`/api/v1/browser/sessions/${encodeURIComponent(sessionId)}/press`, {
+      method: 'POST', headers: apiHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ key }),
+    });
+    return readJson(res);
+  },
+
+  async typeAt(sessionId: string, x: number, y: number, text: string): Promise<{ ok: true }> {
+    const res = await fetch(`/api/v1/browser/sessions/${encodeURIComponent(sessionId)}/type-at`, {
+      method: 'POST', headers: apiHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ x, y, text }),
+    });
+    return readJson(res);
+  },
+
 
   async scroll(sessionId: string, x: number, y: number): Promise<{ ok: true; scrollX: number; scrollY: number }> {
     const res = await fetch(`/api/v1/browser/sessions/${encodeURIComponent(sessionId)}/scroll`, {

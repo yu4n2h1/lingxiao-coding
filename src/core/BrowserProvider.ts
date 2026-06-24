@@ -76,6 +76,7 @@ const DEFAULT_BROWSER_ARGS = [
   '--disable-translate',
   '--mute-audio',
   '--no-first-run',
+  '--remote-debugging-port=0',
 ];
 
 let cachedChromePath: string | undefined | null = null;

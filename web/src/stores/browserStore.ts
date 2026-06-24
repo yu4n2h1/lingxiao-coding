@@ -36,6 +36,9 @@ interface BrowserState {
   scrollBy: (x: number, y: number) => Promise<void>;
   patchElement: (selector: string, patch: { html?: string; text?: string; style?: string; attr?: Record<string, string>; remove?: boolean }) => Promise<boolean>;
   evalJs: (script: string) => Promise<unknown>;
+  typeText: (text: string) => Promise<void>;
+  pressKey: (key: string) => Promise<void>;
+  typeAt: (x: number, y: number, text: string) => Promise<void>;
 }
 
 export const useBrowserStore = create<BrowserState>((set, get) => ({
@@ -243,5 +246,42 @@ export const useBrowserStore = create<BrowserState>((set, get) => ({
       return null;
     }
   },
+  typeText: async (text) => {
+    const session = get().session;
+    if (!session) return;
+    try {
+      await browserClient.type(session.id, text);
+      set({ screenshotUrl: browserClient.screenshotUrl(session.id) });
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : String(error) });
+    }
+  },
+
+  pressKey: async (key) => {
+    const session = get().session;
+    if (!session) return;
+    try {
+      await browserClient.press(session.id, key);
+      set({ screenshotUrl: browserClient.screenshotUrl(session.id) });
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : String(error) });
+    }
+  },
+
+  typeAt: async (x, y, text) => {
+    const session = get().session;
+    if (!session) return;
+    set({ isLoading: true, error: null });
+    try {
+      await browserClient.typeAt(session.id, x, y, text);
+      await new Promise(r => setTimeout(r, 300));
+      set({ screenshotUrl: browserClient.screenshotUrl(session.id) });
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : String(error) });
+    } finally {
+      set({ isLoading: false });
+    }
+  },
+
 
 }));

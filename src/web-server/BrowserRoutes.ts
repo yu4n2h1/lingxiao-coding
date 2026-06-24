@@ -208,7 +208,37 @@ export function registerBrowserRoutes(fastify: FastifyInstance, deps: BrowserRou
     }
   });
 
-  fastify.post('/api/v1/browser/sessions/:id/patch-element', async (request, reply) => {
+  fastify.post('/api/v1/browser/sessions/:id/patch-element', async (request, reply) => {  // v1.0.5: 键盘输入
+  fastify.post('/api/v1/browser/sessions/:id/type', async (request, reply) => {
+    if (!requireServerToken(request, reply)) return;
+    const params = request.params as { id: string };
+    const body = request.body as { text?: string } | undefined;
+    if (!body?.text) { reply.status(400).send({ error: 'text is required' }); return; }
+    try { return { data: await browserRuntime.type(params.id, body.text) }; }
+    catch (error) { sendError(reply, 500, error); }
+  });
+
+  fastify.post('/api/v1/browser/sessions/:id/press', async (request, reply) => {
+    if (!requireServerToken(request, reply)) return;
+    const params = request.params as { id: string };
+    const body = request.body as { key?: string } | undefined;
+    if (!body?.key) { reply.status(400).send({ error: 'key is required' }); return; }
+    try { return { data: await browserRuntime.press(params.id, body.key) }; }
+    catch (error) { sendError(reply, 500, error); }
+  });
+
+  fastify.post('/api/v1/browser/sessions/:id/type-at', async (request, reply) => {
+    if (!requireServerToken(request, reply)) return;
+    const params = request.params as { id: string };
+    const body = request.body as { x?: number; y?: number; text?: string } | undefined;
+    if (typeof body?.x !== 'number' || typeof body?.y !== 'number' || !body.text) {
+      reply.status(400).send({ error: 'x, y and text are required' }); return;
+    }
+    try { return { data: await browserRuntime.typeAt(params.id, body.x, body.y, body.text) }; }
+    catch (error) { sendError(reply, 500, error); }
+  });
+
+
     if (!requireServerToken(request, reply)) return;
     const params = request.params as { id: string };
     const body = request.body as {

@@ -348,6 +348,42 @@ export class BrowserRuntime {
     await session.page.fill(selector, value, { timeout: 5_000 });
     return { ok: true };
   }
+  /** 在当前焦点元素输入文字 */
+  async type(id: string, text: string): Promise<{ ok: true }> {
+    const session = this.getSession(id);
+    session.lastUsedAt = Date.now();
+    await session.page.keyboard.type(text, { delay: 10 });
+    return { ok: true };
+  }
+
+  /** 按键 */
+  async press(id: string, key: string): Promise<{ ok: true }> {
+    const session = this.getSession(id);
+    session.lastUsedAt = Date.now();
+    await session.page.keyboard.press(key);
+    return { ok: true };
+  }
+
+  /** 在指定坐标的元素上输入文字 */
+  async typeAt(id: string, x: number, y: number, text: string): Promise<{ ok: true }> {
+    const session = this.getSession(id);
+    session.lastUsedAt = Date.now();
+    await session.page.mouse.click(Math.max(0, Math.round(x)), Math.max(0, Math.round(y)));
+    await session.page.keyboard.type(text, { delay: 10 });
+    return { ok: true };
+  }
+
+  /** 聚焦并清空输入框 */
+  async focusAndClear(id: string, selector: string): Promise<{ ok: true }> {
+    const session = this.getSession(id);
+    session.lastUsedAt = Date.now();
+    await session.page.focus(selector, { timeout: 5_000 });
+    await session.page.keyboard.press('Control+a');
+    await session.page.keyboard.press('Delete');
+    return { ok: true };
+  }
+
+
 
   /** 滚动页面 */
   async scroll(id: string, delta: { x?: number; y?: number }): Promise<{ ok: true; scrollX: number; scrollY: number }> {

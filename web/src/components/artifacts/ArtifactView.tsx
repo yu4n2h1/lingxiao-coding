@@ -4,6 +4,7 @@ import SafeMarkdown from '../ui/SafeMarkdown';
 import {
   AlertTriangle, Archive, Columns2, Copy, Download, Edit3, Eye, FileText,
   Image as ImageIcon, Loader2, RefreshCw, Save, Table, XCircle,
+  ChevronDown, ChevronRight, Folder, FolderOpen, FileCode,
 } from 'lucide-react';
 import { apiHeaders, getServerToken } from '../../api/headers';
 import { useSessionStore } from '../../stores/sessionStore';
@@ -590,6 +591,121 @@ function PptxStructurePreview({ preview, content }: { preview: ArtifactPreview; 
 }
 
 // ======================== 主组件 ========================
+// ======================== Workspace 文件树 ========================
+
+interface WsFsEntry {
+  name: string;
+  path: string;
+  type: 'file' | 'directory';
+  size?: number;
+  children?: WsFsEntry[];
+  loaded?: boolean;
+}
+
+async function wsFetch<T>(path: string, opts?: RequestInit): Promise<T> {
+  const res = await fetch(`/api/v1${path}`, {
+    ...opts,
+    headers: {
+      'Content-Type': 'application/json',
+      'x-lingxiao-token': getServerToken(),
+      ...(opts?.headers || {}),
+    },
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+function WsFileTree({ sessionId, onOpenFile }: { sessionId: string | null; onOpenFile: (path: string, name: string) => void }) {
+  const serverCwd = useSessionStore((s) => s.serverCwd);
+  const sessions = useSessionStore((s) => s.sessions);
+  const workspace = sessions.find(s => s.id === sessionId)?.workspace || serverCwd || '.';
+  const [tree, setTree] = useState<WsFsEntry[]>([]);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(false);
+  const [activePath, setActivePath] = useState<string | null>(null);
+
+  const fetchTree = useCallback(async (dirPath?: string) => {
+    setLoading(true);
+    try {
+      const data = await wsFetch<{ entries: WsFsEntry[] }>('/fs/list', {
+        method: 'POST',
+        body: JSON.stringify({ path: dirPath || workspace, sessionId }),
+      });
+      if (dirPath) {
+        setTree(prev => mergeWsChildren(prev, dirPath, data.entries || []));
+      } else {
+        setTree(data.entries || []);
+      }
+    } catch { /* silent */ } finally { setLoading(false); }
+  }, [workspace, sessionId]);
+
+  useEffect(() => { fetchTree(); }, [fetchTree]);
+
+  const toggleDir = useCallback(async (node: WsFsEntry) => {
+    const next = new Set(expanded);
+    if (next.has(node.path)) { next.delete(node.path); }
+    else { next.add(node.path); if (!node.loaded) await fetchTree(node.path); }
+    setExpanded(next);
+  }, [expanded, fetchTree]);
+
+  const handleFileClick = (node: WsFsEntry) => {
+    setActivePath(node.path);
+    onOpenFile(node.path, node.name);
+  };
+
+  if (loading && tree.length === 0) return <div className="flex justify-center py-4"><Loader2 size={13} className="animate-spin text-text-tertiary" /></div>;
+  if (tree.length === 0) return <div className="px-2 py-3 text-center text-[10px] text-text-tertiary">无文件</div>;
+
+  return <WsTreeNodes nodes={tree} expanded={expanded} activePath={activePath} onToggleDir={toggleDir} onFileClick={handleFileClick} depth={0} />;
+}
+
+function mergeWsChildren(tree: WsFsEntry[], parentPath: string, children: WsFsEntry[]): WsFsEntry[] {
+  return tree.map(e => e.path === parentPath && e.type === 'directory'
+    ? { ...e, children, loaded: true }
+    : e.children ? { ...e, children: mergeWsChildren(e.children, parentPath, children) } : e
+  );
+}
+
+function WsTreeNodes({ nodes, expanded, activePath, onToggleDir, onFileClick, depth }: {
+  nodes: WsFsEntry[]; expanded: Set<string>; activePath: string | null;
+  onToggleDir: (n: WsFsEntry) => void; onFileClick: (n: WsFsEntry) => void; depth: number;
+}) {
+  return <>{nodes.map(node => {
+    const isExp = expanded.has(node.path);
+    const isDir = node.type === 'directory';
+    const ext = node.name.split('.').pop()?.toLowerCase() || '';
+    return <div key={node.path}>
+      <button
+        onClick={() => isDir ? onToggleDir(node) : onFileClick(node)}
+        className={`w-full flex items-center gap-1 px-1.5 py-0.5 text-[11px] hover:bg-bg-hover text-left ${activePath === node.path ? 'bg-accent-brand/10 text-accent-brand' : 'text-text-secondary'}`}
+        style={{ paddingLeft: `${depth * 10 + 4}px` }}
+      >
+        {isDir ? (
+          <>
+            {isExp ? <ChevronDown size={9} className="shrink-0" /> : <ChevronRight size={9} className="shrink-0" />}
+            {isExp ? <FolderOpen size={11} className="text-accent-brand/60 shrink-0" /> : <Folder size={11} className="text-accent-brand/60 shrink-0" />}
+          </>
+        ) : (
+          <>
+            <span className="w-[9px] shrink-0" />
+            {['ts','tsx','js','jsx','json','py'].includes(ext) ? <FileCode size={11} className="text-accent-blue/60 shrink-0" /> :
+             ['html','htm','svg','xml'].includes(ext) ? <FileCode size={11} className="text-accent-orange/60 shrink-0" /> :
+             ['png','jpg','jpeg','gif','webp','ico'].includes(ext) ? <ImageIcon size={11} className="text-accent-green/60 shrink-0" /> :
+             ['md','txt','log'].includes(ext) ? <FileText size={11} className="text-text-tertiary shrink-0" /> :
+             <Archive size={11} className="text-text-tertiary shrink-0" />}
+          </>
+        )}
+        <span className="truncate">{node.name}</span>
+      </button>
+      {isDir && isExp && node.children && <WsTreeNodes nodes={node.children} expanded={expanded} activePath={activePath} onToggleDir={onToggleDir} onFileClick={onFileClick} depth={depth + 1} />}
+    </div>;
+  })}</>;
+}
+
+
 
 export default function ArtifactView() {
   const { t } = useTranslation();
@@ -941,36 +1057,40 @@ export default function ArtifactView() {
 
   return (
     <div className="flex h-full min-w-0 bg-bg-primary">
-      {/* 左侧：最近文件列表 */}
+      {/* 左侧：workspace 文件树 + 最近文件 */}
       <aside className="artifact-recent-pane w-56 shrink-0 border-r border-border-muted bg-bg-secondary/50 flex flex-col min-h-0">
         <div className="px-3 py-2 border-b border-border-muted">
           <div className="text-xs font-mono font-semibold text-text-primary">{t('artifact.title')}</div>
           <div className="mt-0.5 text-[10px] text-text-tertiary">{t('artifact.subtitle')}</div>
         </div>
-        <div className="flex-1 min-h-0 overflow-y-auto p-2 space-y-1">
-          {recentArtifacts.length === 0 && (
-            <div className="px-2 py-8 text-center text-xs text-text-tertiary">{t('artifact.recent.empty')}</div>
-          )}
-          {recentArtifacts.map((artifact) => (
-            <button
-              key={artifact.path || artifact.url || artifact.name}
-              onClick={() => openArtifact(artifact)}
-              className={`w-full rounded-md px-2 py-2 text-left text-xs transition-colors ${
-                artifact.path === activeArtifact?.path
-                  ? 'bg-accent-brand/10 text-accent-brand'
-                  : 'text-text-secondary hover:bg-bg-hover'
-              }`}
-            >
-              <div className="flex items-center gap-2 min-w-0">
-                <span className="shrink-0">{iconFor(artifact.mimeType)}</span>
-                <span className="truncate font-mono">{artifact.name}</span>
-              </div>
-              <div className="mt-1 truncate text-[10px] text-text-tertiary">
-                {artifact.path ? `${artifact.path}${artifact.line ? `:${artifact.line}` : ''}` : artifact.url || formatFileSize(artifact.size)}
-              </div>
-            </button>
-          ))}
+        {/* Workspace 文件树 */}
+        <div className="flex-1 min-h-0 overflow-y-auto p-1">
+          <WsFileTree
+            sessionId={sessionId}
+            onOpenFile={(path, name) => { openArtifact({ name, path }); }}
+          />
         </div>
+        {/* 最近文件 */}
+        {recentArtifacts.length > 0 && (
+          <div className="shrink-0 max-h-40 border-t border-border-muted overflow-y-auto p-1">
+            <div className="px-1 py-1 text-[9px] font-medium text-text-tertiary uppercase tracking-wide">最近</div>
+            {recentArtifacts.map((artifact) => (
+              <button
+                key={artifact.path || artifact.url || artifact.name}
+                onClick={() => openArtifact(artifact)}
+                className={`w-full rounded px-1.5 py-1 text-left text-[10px] transition-colors ${
+                  artifact.path === activeArtifact?.path
+                    ? 'bg-accent-brand/10 text-accent-brand'
+                    : 'text-text-secondary hover:bg-bg-hover'
+                }`}>
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="shrink-0">{iconFor(artifact.mimeType)}</span>
+                  <span className="truncate font-mono">{artifact.name}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
       </aside>
 
       {/* 右侧：主内容区 */}
