@@ -1,123 +1,121 @@
 /**
  * FileCanvasCompact — 剑阁侧边面板内的文件画布
  *
- * 左侧文件目录树 + 右侧全功能预览
- * 调用 POST /api/v1/fs/list 和 POST /api/v1/fs/read
+ * 文件目录树 + 全功能预览
+ * 使用与 EditorView 一致的 apiFetch 模式（带 sessionId）
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { apiHeaders, getServerToken } from '../../api/headers';
+import { useSessionStore } from '../../stores/sessionStore';
+import { getServerToken } from '../../api/headers';
 import {
   Folder, FolderOpen, File as FileIcon, ChevronRight, ChevronDown,
   FileCode, FileText, Image, Loader2, RefreshCw, Eye, Code2, Home,
 } from 'lucide-react';
 
+// ─── API ───
+
+async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
+  const res = await fetch(`/api/v1${path}`, {
+    ...opts,
+    headers: {
+      'Content-Type': 'application/json',
+      'x-lingxiao-token': getServerToken(),
+      ...(opts?.headers || {}),
+    },
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+// ─── Types ───
+
 interface FsEntry {
   name: string;
   path: string;
-  type: 'directory' | 'file';
+  type: 'file' | 'directory';
   size?: number;
-}
-
-interface FileNode extends FsEntry {
-  children?: FileNode[];
+  children?: FsEntry[];
   loaded?: boolean;
 }
 
+// ─── Component ───
+
 export default function FileCanvasCompact() {
-  const [tree, setTree] = useState<FileNode[]>([]);
-  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
+  const sessionId = useSessionStore((s) => s.sessionId);
+  const serverCwd = useSessionStore((s) => s.serverCwd);
+  const sessions = useSessionStore((s) => s.sessions);
+  const workspace = sessions.find(s => s.id === sessionId)?.workspace || serverCwd || '.';
+
+  const [tree, setTree] = useState<FsEntry[]>([]);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [activeFile, setActiveFile] = useState<string | null>(null);
   const [fileContent, setFileContent] = useState('');
-  const [previewMode, setPreviewMode] = useState<'render' | 'source'>('render');
+  const [previewMode, setPreviewMode] = useState<'render' | 'source'>('source');
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingFile, setIsLoadingFile] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [rootName, setRootName] = useState<string>('root');
 
-  const loadDir = useCallback(async (dirPath: string): Promise<FileNode[]> => {
-    try {
-      const res = await fetch('/api/v1/fs/list', {
-        method: 'POST',
-        headers: apiHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ path: dirPath }),
-      });
-      const json = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(json?.error || `HTTP ${res.status}`);
-      const entries: FsEntry[] = json?.entries || [];
-      return entries.map((e) => ({
-        name: e.name,
-        path: e.path,
-        type: e.type,
-        size: e.size,
-      }));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      return [];
-    }
-  }, []);
-
-  // Load root directory on mount
-  useEffect(() => {
+  const fetchTree = useCallback(async (dirPath?: string) => {
     setIsLoading(true);
     setError(null);
-    loadDir('.').then((nodes) => {
-      setTree(nodes);
-      setIsLoading(false);
-      // Derive root name from first entry path
-      if (nodes[0]?.path) {
-        const parts = nodes[0].path.split('/');
-        // root is everything except the last part (node name)
-        setRootName(parts[parts.length - 2] || 'root');
+    try {
+      const data = await apiFetch<{ entries: FsEntry[] }>('/fs/list', {
+        method: 'POST',
+        body: JSON.stringify({ path: dirPath || workspace, sessionId }),
+      });
+      if (dirPath) {
+        setTree(prev => mergeChildren(prev, dirPath, data.entries || []));
+      } else {
+        setTree(data.entries || []);
       }
-    });
-  }, [loadDir]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to list files');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [workspace, sessionId]);
 
-  // Toggle directory expansion
-  const toggleDir = useCallback(async (node: FileNode) => {
-    const newExpanded = new Set(expandedPaths);
+  // Load root on mount
+  useEffect(() => { fetchTree(); }, [fetchTree]);
+
+  const toggleDir = useCallback(async (node: FsEntry) => {
+    const newExpanded = new Set(expanded);
     if (newExpanded.has(node.path)) {
       newExpanded.delete(node.path);
+      setExpanded(newExpanded);
     } else {
       newExpanded.add(node.path);
+      setExpanded(newExpanded);
       if (!node.loaded) {
-        node.children = await loadDir(node.path);
-        node.loaded = true;
+        await fetchTree(node.path);
       }
     }
-    setExpandedPaths(newExpanded);
-    setTree([...tree]);
-  }, [expandedPaths, loadDir, tree]);
+  }, [expanded, fetchTree]);
 
-  // Load file for preview
   const loadFile = useCallback(async (filePath: string) => {
     setIsLoadingFile(true);
     setActiveFile(filePath);
     setError(null);
     try {
-      // Use GET /api/v1/files/download?path=xxx — returns { content, path, size }
-      const token = encodeURIComponent(getServerToken());
-      const res = await fetch(`/api/v1/files/download?path=${encodeURIComponent(filePath)}&token=${token}`);
+      const params = new URLSearchParams({ path: filePath, token: getServerToken() });
+      if (sessionId) params.set('sessionId', sessionId);
+      const res = await fetch(`/api/v1/files/download?${params.toString()}`);
       const json = await res.json().catch(() => null);
       if (!res.ok) throw new Error(json?.error || `HTTP ${res.status}`);
       setFileContent(json?.content || '');
       const ext = filePath.split('.').pop()?.toLowerCase();
-      setPreviewMode(['html', 'htm'].includes(ext || '') ? 'render' : 'source');
+      setPreviewMode(['html', 'htm', 'svg'].includes(ext || '') ? 'render' : 'source');
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setFileContent('');
     } finally {
       setIsLoadingFile(false);
     }
-  }, []);
-
-  const refreshTree = useCallback(async () => {
-    setIsLoading(true);
-    const nodes = await loadDir('.');
-    setTree(nodes);
-    setExpandedPaths(new Set());
-    setIsLoading(false);
-  }, [loadDir]);
+  }, [sessionId]);
 
   return (
     <div className="flex h-full bg-bg-primary overflow-hidden">
@@ -125,18 +123,20 @@ export default function FileCanvasCompact() {
       <div className="w-48 flex flex-col border-r border-border-subtle bg-bg-secondary flex-shrink-0">
         <div className="flex items-center gap-2 px-2 h-7 border-b border-border-subtle bg-bg-tertiary/50 flex-shrink-0">
           <Home size={11} className="text-text-tertiary" />
-          <span className="text-[10px] font-mono text-text-tertiary truncate flex-1">{rootName}</span>
-          <button onClick={refreshTree} className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary" title="刷新">
+          <span className="text-[10px] font-mono text-text-tertiary truncate flex-1" title={workspace}>
+            {workspace === '.' ? 'root' : workspace.split('/').pop() || 'root'}
+          </span>
+          <button onClick={() => fetchTree()} className="p-0.5 rounded hover:bg-bg-hover text-text-tertiary" title="刷新">
             <RefreshCw size={11} />
           </button>
         </div>
         <div className="flex-1 overflow-auto py-0.5">
-          {isLoading ? (
+          {isLoading && tree.length === 0 ? (
             <div className="flex items-center justify-center py-6 text-text-tertiary"><Loader2 size={14} className="animate-spin" /></div>
           ) : tree.length === 0 ? (
             <div className="px-2 py-4 text-[11px] text-text-tertiary text-center">{error || '无文件'}</div>
           ) : (
-            <TreeNodes nodes={tree} expandedPaths={expandedPaths} activeFile={activeFile} onToggleDir={toggleDir} onFileClick={loadFile} depth={0} />
+            <TreeNodes nodes={tree} expanded={expanded} activeFile={activeFile} onToggleDir={toggleDir} onFileClick={loadFile} depth={0} />
           )}
         </div>
       </div>
@@ -147,7 +147,7 @@ export default function FileCanvasCompact() {
           {activeFile ? (
             <>
               <FileIcon size={11} className="text-text-tertiary" />
-              <span className="text-[10px] font-mono text-text-secondary truncate flex-1" title={activeFile}>{activeFile}</span>
+              <span className="text-[10px] font-mono text-text-secondary truncate flex-1" title={activeFile}>{activeFile.split('/').pop()}</span>
               <button onClick={() => setPreviewMode(p => p === 'render' ? 'source' : 'render')} className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] ${previewMode === 'render' ? 'text-accent-brand bg-accent-brand/10' : 'text-text-tertiary'}`}>
                 {previewMode === 'render' ? <Eye size={10} /> : <Code2 size={10} />}
                 {previewMode === 'render' ? '渲染' : '源码'}
@@ -159,7 +159,7 @@ export default function FileCanvasCompact() {
           {isLoadingFile ? (
             <div className="flex items-center justify-center h-full text-text-tertiary"><Loader2 size={16} className="animate-spin" /></div>
           ) : activeFile ? (
-            <Preview filePath={activeFile} content={fileContent} mode={previewMode} />
+            <Preview filePath={activeFile} content={fileContent} mode={previewMode} sessionId={sessionId} />
           ) : (
             <div className="flex flex-col items-center justify-center h-full text-text-tertiary gap-2">
               <FileText size={32} className="opacity-20" />
@@ -172,14 +172,26 @@ export default function FileCanvasCompact() {
   );
 }
 
-function TreeNodes({ nodes, expandedPaths, activeFile, onToggleDir, onFileClick, depth }: {
-  nodes: FileNode[]; expandedPaths: Set<string>; activeFile: string | null;
-  onToggleDir: (n: FileNode) => void; onFileClick: (p: string) => void; depth: number;
+function mergeChildren(tree: FsEntry[], parentPath: string, children: FsEntry[]): FsEntry[] {
+  return tree.map(entry => {
+    if (entry.path === parentPath && entry.type === 'directory') {
+      return { ...entry, children, loaded: true };
+    }
+    if (entry.children) {
+      return { ...entry, children: mergeChildren(entry.children, parentPath, children) };
+    }
+    return entry;
+  });
+}
+
+function TreeNodes({ nodes, expanded, activeFile, onToggleDir, onFileClick, depth }: {
+  nodes: FsEntry[]; expanded: Set<string>; activeFile: string | null;
+  onToggleDir: (n: FsEntry) => void; onFileClick: (p: string) => void; depth: number;
 }) {
   return (
     <>
       {nodes.map((node) => {
-        const isExpanded = expandedPaths.has(node.path);
+        const isExpanded = expanded.has(node.path);
         const isActive = activeFile === node.path;
         const isDir = node.type === 'directory';
         const ext = node.name.split('.').pop()?.toLowerCase() || '';
@@ -208,7 +220,7 @@ function TreeNodes({ nodes, expandedPaths, activeFile, onToggleDir, onFileClick,
               <span className="truncate">{node.name}</span>
             </button>
             {isDir && isExpanded && node.children && (
-              <TreeNodes nodes={node.children} expandedPaths={expandedPaths} activeFile={activeFile} onToggleDir={onToggleDir} onFileClick={onFileClick} depth={depth + 1} />
+              <TreeNodes nodes={node.children} expanded={expanded} activeFile={activeFile} onToggleDir={onToggleDir} onFileClick={onFileClick} depth={depth + 1} />
             )}
           </div>
         );
@@ -217,7 +229,7 @@ function TreeNodes({ nodes, expandedPaths, activeFile, onToggleDir, onFileClick,
   );
 }
 
-function Preview({ filePath, content, mode }: { filePath: string; content: string; mode: 'render' | 'source' }) {
+function Preview({ filePath, content, mode, sessionId }: { filePath: string; content: string; mode: 'render' | 'source'; sessionId: string | null }) {
   const ext = filePath.split('.').pop()?.toLowerCase() || '';
 
   if (mode === 'render' && ['html', 'htm'].includes(ext)) {
@@ -227,10 +239,11 @@ function Preview({ filePath, content, mode }: { filePath: string; content: strin
     return <div className="flex items-center justify-center h-full p-4 bg-white" dangerouslySetInnerHTML={{ __html: content }} />;
   }
   if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'ico', 'svg'].includes(ext)) {
-    const token = encodeURIComponent(getServerToken());
+    const params = new URLSearchParams({ path: filePath, raw: '1', token: getServerToken() });
+    if (sessionId) params.set('sessionId', sessionId);
     return (
       <div className="flex items-center justify-center h-full p-4 bg-bg-secondary/30">
-        <img src={`/api/v1/files/download?path=${encodeURIComponent(filePath)}&raw=1&token=${token}`} alt={filePath} className="max-w-full max-h-full object-contain" />
+        <img src={`/api/v1/files/download?${params.toString()}`} alt={filePath} className="max-w-full max-h-full object-contain" />
       </div>
     );
   }
