@@ -2779,6 +2779,37 @@ input[type="number"]::placeholder {
 .browser-js-input:focus {
   border-color: color-mix(in srgb, var(--color-accent-brand) 50%, transparent);
 }
+.browser-input-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--color-border-muted);
+  background: var(--color-bg-tertiary);
+  flex-shrink: 0;
+}
+
+.browser-text-input {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 8px;
+  border: 1px solid var(--color-border-muted);
+  border-radius: 4px;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-size: 11px;
+  outline: none;
+}
+
+.browser-text-input:focus {
+  border-color: color-mix(in srgb, var(--color-accent-brand) 50%, transparent);
+}
+
+.browser-text-input::placeholder {
+  color: var(--color-text-quaternary);
+  font-size: 10px;
+}
+
 
 .browser-eval-result {
   position: absolute;

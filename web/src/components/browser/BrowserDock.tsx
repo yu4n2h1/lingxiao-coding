@@ -16,6 +16,7 @@ import {
   Hand,
   Code2,
   Sparkles,
+  Keyboard,
 } from 'lucide-react';
 import { browserClient } from '../../api/BrowserClient';
 import { useBrowserStore } from '../../stores/browserStore';
@@ -310,6 +311,25 @@ export default function BrowserDock({ workspaceName, onInsertPrompt, onSendPromp
           )}
         </div>
       )}
+
+      {/* v1.0.5: 文本输入栏 */}
+      {session && (
+        <div className="browser-input-bar">
+          <Keyboard size={13} className="text-text-tertiary shrink-0" />
+          <input
+            value={inputText}
+            onChange={(e) => setInputText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') { e.preventDefault(); void submitInput(); }
+            }}
+            placeholder={lastClickPos ? "输入文字后回车，将输入到刚才点击的位置..." : "先点击页面上的输入框，再在此输入文字..."}
+            className="browser-text-input"
+          />
+          <button type="button" onClick={() => void submitInput()} disabled={!inputText || isLoading} className="browser-mode-btn is-active" title="输入到页面">
+            <Send size={12} />
+          </button>
+        </div>
+      )}
       {error && (
         <div className="browser-error">
           <X size={13} />
@@ -346,38 +366,19 @@ export default function BrowserDock({ workspaceName, onInsertPrompt, onSendPromp
 
       <div className={`browser-workspace ${selection ? 'has-selection' : ''}`}>
         <div className="browser-preview-column">
-          {/* v1.0.5: iframe 实时模式 — 原生体验 */}
-          {session && session.url && session.url !== 'about:blank' ? (
-            <div className="browser-iframe-container">
-              <iframe
-                key={session.id + session.url}
-                src={session.url}
-                className="browser-iframe"
-                title={session.title || session.url}
-                sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
-                allow="fullscreen"
-              />
-              {/* 检视模式叠加层 */}
-              {interactionMode === 'inspect' || isInspecting ? (
-                <div
-                  className="browser-inspect-overlay"
-                  onClick={handleViewportClick}
-                  style={{ cursor: 'crosshair' }}
-                >
-                  {isLoading && (
-                    <div className="browser-loading-overlay">
-                      <Loader2 size={20} className="animate-spin" />
-                    </div>
-                  )}
-                </div>
-              ) : null}
-            </div>
-          ) : (
-          /* 截图回退模式 */
+          {/* 截图模式 + 键盘输入转发 */}
           <div
             className={`browser-viewport ${interactionMode === 'inspect' || isInspecting ? 'is-inspecting' : 'is-clickable'}`}
             onClick={handleViewportClick}
             onWheel={handleViewportWheel}
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Backspace') { e.preventDefault(); void pressKey('Backspace'); refreshScreenshot(); }
+              else if (e.key === 'Enter') { e.preventDefault(); void pressKey('Enter'); refreshScreenshot(); }
+              else if (e.key === 'Tab') { e.preventDefault(); void pressKey('Tab'); refreshScreenshot(); }
+              else if (e.key === 'Escape') { e.preventDefault(); void pressKey('Escape'); refreshScreenshot(); }
+              else if (e.key.length === 1) { e.preventDefault(); void typeText(e.key); refreshScreenshot(); }
+            }}
             style={{ cursor: interactionMode === 'inspect' || isInspecting ? 'crosshair' : 'pointer' }}
           >
             {screenshotUrl ? (
@@ -412,7 +413,6 @@ export default function BrowserDock({ workspaceName, onInsertPrompt, onSendPromp
               </div>
             )}
           </div>
-          )}
           {session && (
             <div className="browser-page-meta">
               <span className="truncate">{session.title || 'Untitled'}</span>
