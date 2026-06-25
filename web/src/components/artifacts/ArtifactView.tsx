@@ -10,6 +10,9 @@ import { apiHeaders, getServerToken } from '../../api/headers';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useArtifactStore, type ArtifactTarget } from '../../stores/artifactStore';
 import { useTranslation } from 'react-i18next';
+import CommentPopup, { type CommentContext } from './CommentPopup';
+import { acpClient } from '../../api/AcpClient';
+import { MessageSquare } from 'lucide-react';
 
 // Monaco 按需加载，避免影响初始 bundle 体积
 const MonacoEditor = lazy(() => import('@monaco-editor/react').then(m => ({ default: m.default })));
@@ -338,9 +341,10 @@ interface XlsxPreviewProps {
   onSheetChange: (sheetName: string) => void;
   currentSheet: string | null;
   loadingSheet: boolean;
+  onCellComment?: (row: number, col: number, value: string, sheet: string) => void;
 }
 
-function XlsxPreview({ preview, content, onSheetChange, currentSheet, loadingSheet }: XlsxPreviewProps) {
+function XlsxPreview({ preview, content, onSheetChange, currentSheet, loadingSheet, onCellComment }: XlsxPreviewProps) {
   const { t } = useTranslation();
   const sheets = preview.metadata?.sheets ?? [];
   const { headers, rows, total, truncated } = useMemo(() => parseCsvTable(content), [content]);
@@ -397,8 +401,9 @@ function XlsxPreview({ preview, content, onSheetChange, currentSheet, loadingShe
                   {headers.map((_, ci) => (
                     <td
                       key={ci}
-                      className="max-w-[260px] truncate border border-border-muted px-2 py-1 text-text-secondary"
+                      className="max-w-[260px] truncate border border-border-muted px-2 py-1 text-text-secondary cursor-cell"
                       title={row[ci] ?? ''}
+                      onClick={() => onCellComment?.(ri + 1, ci + 1, row[ci] ?? '', activeSheet)}
                     >
                       {row[ci] ?? ''}
                     </td>
@@ -449,10 +454,12 @@ function MarkdownEditor({
   content,
   onChange,
   viewMode,
+  onMount,
 }: {
   content: string;
   onChange: (v: string) => void;
   viewMode: MarkdownViewMode;
+  onMount?: (editor: Parameters<NonNullable<Parameters<typeof MonacoEditor>[0]['onMount']>>[0]) => void;
 }) {
   const { t } = useTranslation();
   const editorNode = (
@@ -462,6 +469,7 @@ function MarkdownEditor({
         language="markdown"
         value={content}
         onChange={(v) => onChange(v ?? '')}
+        onMount={onMount}
         theme="vs-dark"
         options={{
           minimap: { enabled: false },
@@ -496,7 +504,7 @@ function MarkdownEditor({
 
 // ======================== 代码文件 Monaco 编辑器 ========================
 
-function CodeEditor({ content, onChange, language }: { content: string; onChange: (v: string) => void; language: string }) {
+function CodeEditor({ content, onChange, language, onMount }: { content: string; onChange: (v: string) => void; language: string; onMount?: (editor: Parameters<NonNullable<Parameters<typeof MonacoEditor>[0]['onMount']>>[0]) => void; }) {
   const { t } = useTranslation();
   return (
     <Suspense fallback={<div className="flex h-full items-center justify-center text-xs text-text-tertiary"><Loader2 size={14} className="animate-spin mr-1" />{t('artifact.loading.editor')}</div>}>
@@ -505,6 +513,7 @@ function CodeEditor({ content, onChange, language }: { content: string; onChange
         language={language}
         value={content}
         onChange={(v) => onChange(v ?? '')}
+        onMount={onMount}
         theme="vs-dark"
         options={{
           minimap: { enabled: false },
@@ -533,7 +542,7 @@ function ImagePreview({ rawUrl, preview }: { rawUrl: string; preview: ArtifactPr
   );
 }
 
-function DocxPreview({ html }: { html: string }) {
+function DocxPreview({ html, onTextSelect }: { html: string; onTextSelect?: (text: string) => void }) {
   const { t } = useTranslation();
   const sanitized = useMemo(() => DOMPurify.sanitize(html, {
     USE_PROFILES: { html: true },
@@ -547,6 +556,12 @@ function DocxPreview({ html }: { html: string }) {
         </div>
         <div
           className="artifact-docx-prose"
+          onMouseUp={() => {
+            if (!onTextSelect) return;
+            const sel = window.getSelection();
+            const text = sel?.toString().trim();
+            if (text) onTextSelect(text);
+          }}
           // eslint-disable-next-line react/no-danger
           dangerouslySetInnerHTML={{ __html: sanitized }}
         />
@@ -555,7 +570,7 @@ function DocxPreview({ html }: { html: string }) {
   );
 }
 
-function PptxStructurePreview({ preview, content }: { preview: ArtifactPreview; content: string }) {
+function PptxStructurePreview({ preview, content, onSlideComment }: { preview: ArtifactPreview; content: string; onSlideComment?: (slideIndex: number, slideTitle: string, slideText: string) => void }) {
   const { t } = useTranslation();
   const slides = preview.metadata?.slides ?? [];
   if (slides.length === 0) {
@@ -572,7 +587,11 @@ function PptxStructurePreview({ preview, content }: { preview: ArtifactPreview; 
         {t('artifact.pptx.renderNotice')} · {t('artifact.pptx.slides', { count: preview.metadata?.pages ?? slides.length })}
       </div>
       {slides.map((slide) => (
-        <section key={slide.index} className="artifact-slide">
+        <section
+          key={slide.index}
+          className={`artifact-slide ${onSlideComment ? 'cursor-pointer' : ''}`}
+          onClick={() => onSlideComment?.(slide.index, slide.title || `Slide ${slide.index}`, slide.text)}
+        >
           <div className="artifact-slide-rune">{String(slide.index).padStart(2, '0')}</div>
           <div className="artifact-slide-content">
             <h2>{slide.title || t('artifact.pptx.untitledSlide', { index: slide.index })}</h2>
@@ -733,6 +752,11 @@ export default function ArtifactView() {
   // Markdown 视图模式
   const [mdViewMode, setMdViewMode] = useState<MarkdownViewMode>('preview');
 
+  // ── 评论模式 ──
+  const [commentMode, setCommentMode] = useState(false);
+  const [commentContext, setCommentContext] = useState<CommentContext | null>(null);
+  const monacoEditorRef = useRef<Parameters<NonNullable<Parameters<typeof MonacoEditor>[0]['onMount']>>[0] | null>(null);
+
   const rawUrl = useMemo(() => {
     if (!preview?.path) return activeArtifact?.url || '';
     const params = new URLSearchParams({ path: preview.path, token: getServerToken() });
@@ -875,6 +899,80 @@ export default function ArtifactView() {
     void loadPreview(activeArtifact, nextMode);
   };
 
+  // ── 评论相关逻辑 ──
+
+  /** 从 Monaco editor 获取选区上下文 */
+  const getMonacoSelection = (): CommentContext | null => {
+    const editor = monacoEditorRef.current;
+    if (!editor || !preview?.path) return null;
+    const selection = editor.getSelection();
+    if (!selection) return null;
+    const startLine = selection.startLineNumber;
+    const endLine = selection.endLineNumber;
+    const selectedText = editor.getModel()?.getValueInRange(selection) ?? '';
+    // 如果没有选中文本，取当前行内容
+    const finalText = selectedText || (editor.getModel()?.getLineContent(startLine) ?? '');
+    return {
+      filePath: preview.path,
+      format: preview.format,
+      selectionType: 'line',
+      selectedText: finalText || undefined,
+      startLine,
+      endLine: endLine > startLine ? endLine : undefined,
+    };
+  };
+
+  /** 发送评论给 Leader */
+  const sendCommentToLeader = async (comment: string, ctx: CommentContext) => {
+    // 构建结构化消息
+    const parts: string[] = [];
+    parts.push(`[源码评论] 文件: ${ctx.filePath}`);
+    if (ctx.format) parts.push(`格式: ${ctx.format}`);
+    if (ctx.selectionType === 'line' && ctx.startLine) {
+      const range = ctx.endLine ? `L${ctx.startLine}-${ctx.endLine}` : `L${ctx.startLine}`;
+      parts.push(`位置: ${range}`);
+    }
+    if (ctx.sheet) parts.push(`Sheet: ${ctx.sheet}`);
+    if (ctx.slideIndex !== undefined) parts.push(`Slide: ${ctx.slideIndex}`);
+    if (ctx.row !== undefined && ctx.col !== undefined) parts.push(`单元格: R${ctx.row}C${ctx.col}`);
+    if (ctx.selectedText) {
+      parts.push(`选中内容:`);
+      parts.push('```');
+      parts.push(ctx.selectedText);
+      parts.push('```');
+    }
+    parts.push('');
+    parts.push(`评论: ${comment}`);
+    parts.push('');
+    parts.push('请根据以上上下文和评论，对该文件进行源码级修改。');
+
+    const message = parts.join('\n');
+    await acpClient.sendJsonRpc('session/prompt', { prompt: message });
+  };
+
+  /** 处理评论按钮点击 */
+  const handleCommentAction = () => {
+    if (!preview?.path) return;
+    // 切换评论模式
+    const nextMode = !commentMode;
+    setCommentMode(nextMode);
+    if (nextMode) {
+      // 对于 Monaco 编辑器，尝试立即获取选区
+      const monacoSel = getMonacoSelection();
+      if (monacoSel && monacoSel.selectedText) {
+        setCommentContext(monacoSel);
+      }
+      // 其他渲染器等用户选中/点击后再弹出
+    } else {
+      setCommentContext(null);
+    }
+  };
+
+  /** 处理 Monaco editor mount */
+  const handleEditorMount = (editor: Parameters<NonNullable<Parameters<typeof MonacoEditor>[0]['onMount']>>[0]) => {
+    monacoEditorRef.current = editor;
+  };
+
   // SVG: 从后端拿到内容，如果 editable=false 且是 svg 格式，从 content 渲染
   const isSvgFormat = normalizeFormat(preview?.format) === 'svg';
 
@@ -974,18 +1072,36 @@ export default function ArtifactView() {
           onSheetChange={handleSheetChange}
           currentSheet={selectedSheet}
           loadingSheet={loadingSheet}
+          onCellComment={commentMode && preview.path ? (row, col, value, sheet) => {
+            setCommentContext({ filePath: preview.path, format: preview.format, selectionType: 'cell', selectedText: value, row, col, sheet });
+          } : undefined}
         />
       );
     }
 
     // ── DOCX：后端 mammoth 转 HTML 富文本渲染 ──
     if (format === 'docx' && preview.metadata?.renderer === 'html') {
-      return <DocxPreview html={content} />;
+      return (
+        <DocxPreview
+          html={content}
+          onTextSelect={commentMode && preview.path ? (text) => {
+            setCommentContext({ filePath: preview.path, format: preview.format, selectionType: 'text', selectedText: text });
+          } : undefined}
+        />
+      );
     }
 
     // ── PPTX：后端 OOXML slide 结构渲染 ──
     if (format === 'pptx') {
-      return <PptxStructurePreview preview={preview} content={content} />;
+      return (
+        <PptxStructurePreview
+          preview={preview}
+          content={content}
+          onSlideComment={commentMode && preview.path ? (slideIndex, slideTitle, slideText) => {
+            setCommentContext({ filePath: preview.path, format: preview.format, selectionType: 'slide', selectedText: slideText, slideIndex });
+          } : undefined}
+        />
+      );
     }
 
     // ── CSV（纯 CSV 格式）──
@@ -997,6 +1113,9 @@ export default function ArtifactView() {
           onSheetChange={handleSheetChange}
           currentSheet={selectedSheet}
           loadingSheet={loadingSheet}
+          onCellComment={commentMode && preview.path ? (row, col, value, sheet) => {
+            setCommentContext({ filePath: preview.path, format: preview.format, selectionType: 'cell', selectedText: value, row, col, sheet });
+          } : undefined}
         />
       );
     }
@@ -1008,6 +1127,7 @@ export default function ArtifactView() {
           content={content}
           onChange={setContent}
           viewMode={mdViewMode}
+          onMount={handleEditorMount}
         />
       );
     }
@@ -1015,7 +1135,17 @@ export default function ArtifactView() {
     // ── Markdown 只读 ──
     if (isMarkdownFile) {
       return (
-        <div className="artifact-prose h-full overflow-auto px-6 py-4 text-sm text-text-secondary">
+        <div
+          className="artifact-prose h-full overflow-auto px-6 py-4 text-sm text-text-secondary"
+          onMouseUp={() => {
+            if (!commentMode) return;
+            const sel = window.getSelection();
+            const text = sel?.toString().trim();
+            if (text && preview?.path) {
+              setCommentContext({ filePath: preview.path, format: preview.format, selectionType: 'text', selectedText: text });
+            }
+          }}
+        >
           <SafeMarkdown>{content}</SafeMarkdown>
         </div>
       );
@@ -1024,12 +1154,22 @@ export default function ArtifactView() {
     // ── 可编辑文本/代码文件 → Monaco ──
     if (preview.editable) {
       const lang = monacoLanguage(preview.name);
-      return <CodeEditor content={content} onChange={setContent} language={lang} />;
+      return <CodeEditor content={content} onChange={setContent} language={lang} onMount={handleEditorMount} />;
     }
 
     // ── 纯文本回退 ──
     return (
-      <pre className="h-full overflow-auto whitespace-pre-wrap break-words px-4 py-3 font-mono text-xs leading-6 text-text-secondary">
+      <pre
+        className="h-full overflow-auto whitespace-pre-wrap break-words px-4 py-3 font-mono text-xs leading-6 text-text-secondary"
+        onMouseUp={() => {
+          if (!commentMode) return;
+          const sel = window.getSelection();
+          const text = sel?.toString().trim();
+          if (text && preview?.path) {
+            setCommentContext({ filePath: preview.path, format: preview.format, selectionType: 'text', selectedText: text });
+          }
+        }}
+      >
         {content}
       </pre>
     );
@@ -1174,6 +1314,22 @@ export default function ArtifactView() {
               </button>
             )}
 
+            {/* 评论按钮 */}
+            {preview?.path && (
+              <button
+                onClick={handleCommentAction}
+                className={`inline-flex items-center gap-1 rounded border px-2 py-1 text-xs transition-colors ${
+                  commentMode
+                    ? 'border-accent-brand bg-accent-brand/10 text-accent-brand'
+                    : 'border-border-muted text-text-secondary hover:text-text-primary hover:border-accent-brand/40'
+                }`}
+                title={t('artifact.comment.button', '评论并请求源码修改')}
+              >
+                <MessageSquare size={13} />
+                {t('artifact.comment.buttonText', '评论')}
+              </button>
+            )}
+
             <button
               onClick={clearArtifact}
               disabled={!activeArtifact}
@@ -1186,9 +1342,21 @@ export default function ArtifactView() {
         </div>
 
         {/* 内容区 */}
-        <div className="min-h-0 flex-1 flex flex-col">
+        <div className="relative min-h-0 flex-1 flex flex-col">
           {!loading && !error && <PreviewWarningStrip preview={preview} extra={sheetError} />}
-          <div className="min-h-0 flex-1">{renderContent()}</div>
+          {commentMode && !commentContext && (
+            <div className="shrink-0 border-b border-accent-brand/30 bg-accent-brand/10 px-3 py-1.5 text-[11px] text-accent-brand flex items-center gap-2">
+              <MessageSquare size={12} />
+              {t('artifact.comment.modeHint', '评论模式已开启 — 选中内容后点击评论')}
+            </div>
+          )}
+          <div className={`min-h-0 flex-1 ${commentMode ? 'ring-1 ring-inset ring-accent-brand/20' : ''}`}>{renderContent()}</div>
+          {/* 评论浮窗 */}
+          <CommentPopup
+            context={commentContext}
+            onSend={sendCommentToLeader}
+            onClose={() => { setCommentContext(null); setCommentMode(false); }}
+          />
         </div>
       </main>
     </div>

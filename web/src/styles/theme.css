@@ -988,18 +988,22 @@ a:hover {
 }
 
 [data-theme="dark"] .codex-topbar {
-  /* Dark 顶栏：墨底青锋，深邃有神 */
+  /* Dark 顶栏：与主题底色同步，墨底青锋，深邃有神。
+     此前误用 --lingxiao-ink(暗色下为近白 #eff2f1)与不存在的 --lingxiao-jade,
+     导致顶栏偏灰、与主题脱节。现改用 --color-bg-secondary / --color-bg-primary
+     作为基底，叠加 --lingxiao-sword 暖金微光与 --lingxiao-jade-deep 青锋点缀，
+     使顶栏与侧栏/聊天底色保持同一色阶。 */
   background:
-    linear-gradient(180deg, 
-      color-mix(in srgb, var(--lingxiao-ink) 28%, var(--color-bg-secondary)),
-      color-mix(in srgb, var(--lingxiao-ink) 18%, var(--color-bg-primary))
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--color-bg-secondary) 96%, var(--lingxiao-sword) 4%),
+      color-mix(in srgb, var(--color-bg-primary) 98%, var(--lingxiao-jade-deep) 2%)
     ),
-    color-mix(in srgb, var(--lingxiao-ink) 42%, var(--color-bg-primary));
-  border-bottom-color: color-mix(in srgb, var(--lingxiao-jade) 24%, var(--color-border-muted));
+    var(--color-bg-primary);
+  border-bottom-color: color-mix(in srgb, var(--lingxiao-jade-deep) 22%, var(--color-border-muted));
   box-shadow:
-    inset 0 -1px 0 color-mix(in srgb, var(--lingxiao-jade) 16%, transparent),
-    0 6px 20px rgba(95, 224, 199, 0.06),
-    0 2px 8px rgba(23, 32, 37, 0.4);
+    inset 0 -1px 0 color-mix(in srgb, var(--lingxiao-jade-deep) 16%, transparent),
+    0 6px 20px rgba(0, 0, 0, 0.28),
+    0 2px 8px rgba(0, 0, 0, 0.34);
 }
 
 .chat-composer-area {
@@ -4165,10 +4169,22 @@ input[type="number"]::placeholder {
 
 .browser-dock-shell--expanded {
   height: 100%;
+  min-height: 0;
+  overflow-y: auto;
   border-radius: 8px;
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--color-bg-card) 86%, transparent), var(--color-bg-primary));
   padding: 10px;
+}
+
+/* 固定高度控制区不被 viewport 的 min-height 压缩/挤出可视区 */
+.browser-dock-shell--expanded > .browser-tab-strip,
+.browser-dock-shell--expanded > .browser-url-row,
+.browser-dock-shell--expanded > .browser-suggestion-row,
+.browser-dock-shell--expanded > .browser-mode-bar,
+.browser-dock-shell--expanded > .browser-input-bar,
+.browser-dock-shell--expanded > .browser-dock-header {
+  flex-shrink: 0;
 }
 
 .workbench-panel.is-browser .browser-dock-shell--expanded {
@@ -4295,13 +4311,13 @@ input[type="number"]::placeholder {
 }
 
 .browser-dock-shell--expanded .browser-viewport {
-  flex: 1;
-  min-height: clamp(440px, calc(100vh - 390px), 720px);
+  flex: 1 1 auto;
+  min-height: clamp(240px, calc(100vh - 390px), 720px);
   aspect-ratio: auto;
 }
 
 .workbench-panel.is-browser .browser-dock-shell--expanded .browser-viewport {
-  min-height: clamp(520px, calc(100vh - 340px), 820px);
+  min-height: clamp(280px, calc(100vh - 340px), 820px);
 }
 
 .workbench-panel.is-browser .browser-workspace.has-selection .browser-viewport {

@@ -42,7 +42,7 @@ import {
 } from './types.js';
 import { classifyLLMError, createLLMError } from './errors.js';
 import { extractTokenUsage } from './usageExtractor.js';
-import { applyThinkingParams, supportsThinking, getThinkingParams } from './model_capabilities.js';
+import { applyThinkingParams, supportsThinking, getThinkingParams, toAnthropicEffort } from './model_capabilities.js';
 import { getInitialMaxTokens, getEscalatedMaxTokens, getModelOutputLimit } from './tokenLimits.js';
 import { createHeartbeatTimer } from './provider_runtime.js';
 import {
@@ -242,6 +242,15 @@ export class AnthropicContentGenerator implements ContentGenerator {
 
     applyThinkingParams(this.modelId, requestBody);
     this.clampThinkingBudget(requestBody);
+
+    // 2026-06-25 修复「思考强度未传递」：Anthropic 顶层 output_config.effort 是网关/远程
+    // 识别「思考强度档位」的唯一信号。旧实现只发 thinking.budget_tokens（预算），从不发
+    // effort，导致凌霄代理网关等远端显示「没有思考强度指定」——budget_tokens 是预算量纲、
+    // 不是强度档位，无法表达用户配置的 reasoning_effort（low/medium/high/xhigh/max）。
+    // 现在把用户 reasoning_effort 映射到 Anthropic 合法 effort（low|medium|high|max），
+    // 合并进 output_config。仅当 thinking 实际开启且能映射出合法档位时才下发，避免给
+    // 非思考请求或 adaptive/none 强度注入无意义字段。
+    this.applyOutputConfigEffort(requestBody);
 
     // 防漂移：推理/编排/判定调用默认采样温度 0(确定性解码)。
     // 注意：Anthropic extended thinking 开启时 API 强制要求 temperature=1，此时
@@ -643,6 +652,32 @@ export class AnthropicContentGenerator implements ContentGenerator {
     if (!currentBudget || currentBudget > maxBudget) {
       requestBody.thinking = { ...thinking, budget_tokens: maxBudget };
     }
+  }
+
+  /**
+   * 把用户配置的 reasoning_effort 强度档位注入 Anthropic 顶层 output_config.effort。
+   *
+   * 背景（2026-06-25）：thinking.budget_tokens 只是「思考预算量纲」，不是「强度档位」。
+   * 凌霄代理网关及部分 Anthropic 兼容远端依据 output_config.effort 判定思考强度；
+   * 旧实现只发 budget_tokens 不发 effort → 远端显示「没有思考强度指定」。
+   *
+   * 仅当本次 thinking 实际开启（type=enabled 或 adaptive）时才下发 effort，
+   * 避免给非思考请求注入无意义字段。effort 档位映射见 toAnthropicEffort。
+   */
+  private applyOutputConfigEffort(requestBody: Record<string, unknown>): void {
+    const thinking = requestBody.thinking as Record<string, unknown> | undefined;
+    if (!thinking) return;
+    // 仅在 thinking 开启相关态下下发强度：enabled（显式预算）/ adaptive（自适应）。
+    // disabled / 未配置时不发 effort，避免误导远端开启思考。
+    if (thinking.type !== 'enabled' && thinking.type !== 'adaptive') return;
+
+    const effort = String(getConfigValue('llm.reasoning_effort') || 'high');
+    const anthropicEffort = toAnthropicEffort(effort);
+    if (!anthropicEffort) return;
+
+    const existing =
+      isRecord(requestBody.output_config) ? requestBody.output_config as Record<string, unknown> : {};
+    requestBody.output_config = { ...existing, effort: anthropicEffort };
   }
 
   private getMaxOutputTokens(model: string, escalated = false): number {

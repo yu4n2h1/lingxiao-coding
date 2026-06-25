@@ -90,13 +90,15 @@ async function setupAutoUpdater(): Promise<void> {
   });
 
   // 启动后 5 秒检查更新，之后每 4 小时检查一次
-  setTimeout(() => {
+  const initialCheck = setTimeout(() => {
     autoUpdater.checkForUpdates().catch(() => {/* 静默失败 */});
   }, 5_000);
+  initialCheck.unref?.();
 
-  setInterval(() => {
+  const periodicCheck = setInterval(() => {
     autoUpdater.checkForUpdates().catch(() => {/* 静默失败 */});
   }, 4 * 60 * 60 * 1000);
+  periodicCheck.unref?.();
 }
 
 function resolveIconPath(): string | undefined {

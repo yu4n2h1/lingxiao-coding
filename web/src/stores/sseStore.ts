@@ -616,7 +616,50 @@ const pendingToolOutputs: PendingToolOutput[] = [];
 let toolOutputFlushHandle: ReturnType<typeof requestAnimationFrame> | ReturnType<typeof setTimeout> | null = null;
 const pendingStream: { entries: PendingStreamEntry[] } = { entries: [] };
 let streamFlushHandle: ReturnType<typeof requestAnimationFrame> | ReturnType<typeof setTimeout> | null = null;
-const hasRAF = typeof requestAnimationFrame === 'function';
+
+// ── 性能优化 #7: toolCallId → messageIndex 缓存 ──
+// 替代 messages.map 全量遍历查找 callId，O(1) 查找替代 O(n)
+// 在 messages 数组变化时通过 invalidate 重建
+let _toolCallIndexCache: Map<string, number> | null = null;
+let _toolCallIndexCacheLen = -1;
+function getToolCallIndex(messages: Message[]): Map<string, number> {
+  if (_toolCallIndexCache && _toolCallIndexCacheLen === messages.length) return _toolCallIndexCache;
+  const map = new Map<string, number>();
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i];
+    if (m.role === 'assistant' && m.toolCalls) {
+      for (const tc of m.toolCalls) {
+        if (tc.id) map.set(tc.id, i);
+      }
+    }
+  }
+  _toolCallIndexCache = map;
+  _toolCallIndexCacheLen = messages.length;
+  return map;
+}
+function invalidateToolCallIndex() {
+  _toolCallIndexCache = null;
+  _toolCallIndexCacheLen = -1;
+}
+// ── 性能优化 #7: recentUserMessages 缓存 ──
+// 避免每条 SSE 事件都 filter 全量 messages
+let _recentUserMessagesCache: { len: number; result: Array<{ id: string; content: string; timestamp: number }> } | null = null;
+function getRecentUserMessages(messages: Message[], count = 3) {
+  if (_recentUserMessagesCache && _recentUserMessagesCache.len === messages.length) {
+    return _recentUserMessagesCache.result.slice(-count);
+  }
+  const result: Array<{ id: string; content: string; timestamp: number }> = [];
+  for (let i = messages.length - 1; i >= 0 && result.length < count; i--) {
+    if (messages[i].role === 'user') {
+      result.unshift({ id: messages[i].id, content: messages[i].content.substring(0, 50), timestamp: messages[i].timestamp });
+    }
+  }
+  _recentUserMessagesCache = { len: messages.length, result: [...result] };
+  return result;
+}
+function invalidateRecentUserMessages() {
+  _recentUserMessagesCache = null;
+}const hasRAF = typeof requestAnimationFrame === 'function';
 const scheduleRaf = (fn: () => void) => hasRAF ? requestAnimationFrame(fn) : setTimeout(fn, 16);
 const cancelRaf = (h: ReturnType<typeof requestAnimationFrame> | ReturnType<typeof setTimeout>) =>
   hasRAF ? cancelAnimationFrame(h as number) : clearTimeout(h as ReturnType<typeof setTimeout>);
@@ -642,6 +685,9 @@ export function clearPendingStreamBuffers(): void {
   pendingToolOutputs.length = 0;
   pendingStream.entries = [];
   resetThinkStreamState();
+  // #7: 清理 toolCall 索引缓存和 recentUserMessages 缓存
+  invalidateToolCallIndex();
+  invalidateRecentUserMessages();
   // Tear down the streaming-watchdog interval too: every session-lifecycle reset
   // (switch / connect / disconnect / reset) routes through this function, and the
   // 30s interval was previously created once and never cleared. setPhase re-enables
@@ -683,14 +729,24 @@ function flushToolOutputBuffers() {
   getStore().setState((s) => {
     let messages = s.messages;
     let changed = false;
+    // #7 优化：用 toolCallId → index 缓存替代 messages.map 全量遍历
+    const tcIndex = getToolCallIndex(messages);
     for (const batch of batches) {
       const combined = batch.chunks.join('');
-      messages = messages.map(m => {
-        if (m.role !== 'assistant' || !m.toolCalls?.some(tc => tc.id === batch.callId)) return m;
-        changed = true;
-        return { ...m, toolCalls: m.toolCalls!.map(tc => tc.id === batch.callId ? { ...tc, streamingOutput: appendStreamingOutput(tc.streamingOutput || '', combined) } : tc) };
-      });
+      const msgIdx = tcIndex.get(batch.callId);
+      if (msgIdx === undefined) continue;
+      const m = messages[msgIdx];
+      if (m.role !== 'assistant' || !m.toolCalls) continue;
+      const tcIdx = m.toolCalls.findIndex(tc => tc.id === batch.callId);
+      if (tcIdx < 0) continue;
+      changed = true;
+      const newToolCalls = [...m.toolCalls];
+      newToolCalls[tcIdx] = { ...newToolCalls[tcIdx], streamingOutput: appendStreamingOutput(newToolCalls[tcIdx].streamingOutput || '', combined) };
+      const newMessages = [...messages];
+      newMessages[msgIdx] = { ...m, toolCalls: newToolCalls };
+      messages = newMessages;
     }
+    if (changed) invalidateToolCallIndex();
     return changed ? { messages } : s;
   });
 }
@@ -1005,11 +1061,7 @@ function handleSessionUpdate(store: SessionState, update: SessionEventPayload, d
             id: umId,
             content: umContent.substring(0, 50),
             timestamp: umTimestamp,
-            recentUserMessages: msgs.filter(m => m.role === 'user').slice(-3).map(m => ({
-              id: m.id,
-              content: m.content.substring(0, 50),
-              timestamp: m.timestamp,
-            })),
+            recentUserMessages: getRecentUserMessages(msgs),
           });
         }
 
@@ -1137,8 +1189,14 @@ function handleSessionUpdate(store: SessionState, update: SessionEventPayload, d
         update.result, update.error ? 'failed' : 'completed', update.tool
       );
       const trUpdatedState = getStore().getState();
-      const trAssistantMsgs = [...trUpdatedState.messages].reverse().filter(m => m.role === 'assistant' && m.toolCalls?.length);
-      const trHasOpenTools = trAssistantMsgs.some(m => m.toolCalls!.some(t => isOpenToolCall(t.status)));
+      // #7 优化：从尾部反向扫描查找是否有 open tool calls，避免 [...messages].reverse().filter()
+      let trHasOpenTools = false;
+      for (let i = trUpdatedState.messages.length - 1; i >= 0; i--) {
+        const m = trUpdatedState.messages[i];
+        if (m.role === 'assistant' && m.toolCalls?.length) {
+          if (m.toolCalls.some(t => isOpenToolCall(t.status))) { trHasOpenTools = true; break; }
+        }
+      }
       if (!trHasOpenTools && shouldAcceptIdleTransition(trUpdatedState) === false) {
         store.setPhase(phaseForBusySignal(getStore().getState().phase));
       }
@@ -1769,7 +1827,19 @@ function handleSessionUpdatePart8(store: SessionState, update: SessionEventPaylo
       markStreamingActivity();
       if (update.callId) {
         getStore().setState((s) => {
-          const messages = s.messages.map(m => { if (m.role !== 'assistant' || !m.toolCalls?.some(tc => tc.id === update.callId)) return m; return { ...m, toolCalls: m.toolCalls!.map(tc => tc.id === update.callId ? { ...tc, progressMessage: update.message } : tc) }; });
+          // #7 优化：用 toolCallId → index 缓存替代 messages.map 全量遍历
+          const tcIndex = getToolCallIndex(s.messages);
+          const msgIdx = tcIndex.get(update.callId!);
+          if (msgIdx === undefined) return s;
+          const m = s.messages[msgIdx];
+          if (m.role !== 'assistant' || !m.toolCalls) return s;
+          const tcIdx = m.toolCalls.findIndex(tc => tc.id === update.callId);
+          if (tcIdx < 0) return s;
+          const newToolCalls = [...m.toolCalls];
+          newToolCalls[tcIdx] = { ...newToolCalls[tcIdx], progressMessage: update.message };
+          const messages = [...s.messages];
+          messages[msgIdx] = { ...m, toolCalls: newToolCalls };
+          invalidateToolCallIndex();
           return { messages };
         });
       }

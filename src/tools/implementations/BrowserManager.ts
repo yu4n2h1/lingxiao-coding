@@ -170,6 +170,9 @@ export class BrowserManager {
   private get IDLE_TIMEOUT_MS(): number {
     return readBrowserIdleMs(5 * 60 * 1000);
   }
+  /** #3 优化：daemon 模式最大空闲超时（10 分钟），即使 daemon 也自动释放 */
+  private static readonly DAEMON_MAX_IDLE_MS = 10 * 60 * 1000;
+  private daemonMaxIdleTimer: ReturnType<typeof setTimeout> | null = null;
   /** 当前 launch 时使用的 proxy 配置（用于检测 per-call proxy 是否需要新 context） */
   private launchedWithProxy: ProxyConfig | undefined;
   /**
@@ -316,6 +319,10 @@ export class BrowserManager {
       clearTimeout(this.idleTimer);
       this.idleTimer = null;
     }
+    if (this.daemonMaxIdleTimer) {
+      clearTimeout(this.daemonMaxIdleTimer);
+      this.daemonMaxIdleTimer = null;
+    }
     if (this.browser?.isConnected()) {
       await this.browser.close();
     }
@@ -328,8 +335,17 @@ export class BrowserManager {
 
   private resetIdleTimer(): void {
     if (this.idleTimer) clearTimeout(this.idleTimer);
-    // Daemon 模式：跨工具调用长期驻留，不再 idle 自动关闭。
-    if (readBrowserDaemonFlag()) return;
+    // #3 优化：daemon 模式也设置最大空闲超时，避免 Chromium 永久驻留
+    if (this.daemonMaxIdleTimer) clearTimeout(this.daemonMaxIdleTimer);
+    if (readBrowserDaemonFlag()) {
+      // Daemon 模式：跨工具调用长期驻留，但 10 分钟无活动后自动关闭
+      this.daemonMaxIdleTimer = setTimeout(() => {
+        debug('Daemon max idle timeout reached, closing browser');
+        this.close().catch(() => {/* ignore */});
+      }, BrowserManager.DAEMON_MAX_IDLE_MS);
+      this.daemonMaxIdleTimer.unref?.();
+      return;
+    }
     this.idleTimer = setTimeout(() => this.close(), this.IDLE_TIMEOUT_MS);
     this.idleTimer.unref?.();
   }

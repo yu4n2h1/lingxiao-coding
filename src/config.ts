@@ -1543,8 +1543,12 @@ export function isLlmConfigUserSet(path: string): boolean {
 
 export function refreshRuntimeConfig(): Config {
   const latest = loadSettings();
-  // 深拷贝避免嵌套对象引用不一致
-  const fresh = structuredClone(latest);
+  // 浅拷贝顶层 + 针对性深拷贝已知可变嵌套对象，替代 structuredClone 全量深拷贝
+  const fresh = { ...latest } as Config;
+  // 针对性深拷贝嵌套可变对象
+  if (latest.llm) fresh.llm = structuredClone(latest.llm);
+  if (latest.mcp) fresh.mcp = structuredClone(latest.mcp);
+  if (latest.agents) fresh.agents = structuredClone(latest.agents);
   for (const key of Object.keys(config) as (keyof Config)[]) {
     delete config[key];
   }

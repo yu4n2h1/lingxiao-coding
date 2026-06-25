@@ -733,6 +733,16 @@ export async function startServer() {
   watchdogTimer.unref();
   writeWatchdog();
 
+  // #6 优化：每 60s 扫描僵尸子进程并回收
+  const zombieScanTimer = setInterval(async () => {
+    try {
+      // 扫描 Shell.ts 跟踪的后台进程，回收已退出但未被 reap 的子进程
+      const { scanZombieProcesses } = await import('./tools/implementations/Shell.js');
+      scanZombieProcesses();
+    } catch { /* 静默失败 */ }
+  }, 60_000);
+  zombieScanTimer.unref();
+
   const displayHost = webHost === '0.0.0.0' ? 'localhost' : webHost;
   console.log(`🚀 凌霄剑域服务器启动完成`);
   console.log(`📊 数据库: ${dbPath}`);

@@ -142,6 +142,19 @@ function trackBackgroundProcess(child: ChildProcess): void {
 }
 
 /**
+ * #6 优化：扫描已退出但仍在 tracking 表中的僵尸进程引用，清理泄漏
+ */
+export function scanZombieProcesses(): void {
+  for (const [pid, child] of backgroundProcesses) {
+    if (child.exitCode !== null || child.signalCode !== null || child.killed) {
+      backgroundProcesses.delete(pid);
+      try { child.unref(); } catch { /* ignore */ }
+    }
+  }
+}
+
+
+/**
  * 三阶段进程终止：SIGTERM → 等待 2s → SIGKILL
  */
 function killProcessGracefully(pid: number): void {

@@ -122,15 +122,10 @@ export function BrowserScreencastCanvas({ sessionId, width, height }: Screencast
 
   // Keyboard events — forward all to CDP
   const handleKeyDown = (e: React.KeyboardEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-    if (e.key.length === 1) {
-      sendMsg({ type: 'key', key: e.key, action: 'down' });
-    } else {
-      sendMsg({ type: 'key', key: e.key, action: 'down' });
-    }
+    // 不 preventDefault，避免吞掉地址栏等其它元素的键盘事件
+    sendMsg({ type: 'key', key: e.key, action: 'down' });
   };
   const handleKeyUp = (e: React.KeyboardEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
     sendMsg({ type: 'key', key: e.key, action: 'up' });
   };
   const handleInput = (e: React.CompositionEvent<HTMLCanvasElement>) => {
@@ -138,14 +133,10 @@ export function BrowserScreencastCanvas({ sessionId, width, height }: Screencast
     sendMsg({ type: 'type', text: e.data });
   };
 
-  // Text input via invisible input
+  // Text input via invisible input (CJK composition only)
   const inputRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    // Focus the hidden input when canvas is clicked to enable keyboard input
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    canvas.addEventListener('click', () => inputRef.current?.focus());
-  }, [hasFrame]);
+  // 移除 canvas click 时 focus 隐藏 input 的逻辑
+  // 旧代码会在每次点击 canvas 时把焦点抢到隐藏 input，导致地址栏无法输入
 
   return (
     <div ref={containerRef} className="browser-screencast-container" style={{ width: '100%', height: '100%', position: 'relative', overflow: 'hidden' }}>

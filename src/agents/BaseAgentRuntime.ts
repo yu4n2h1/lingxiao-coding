@@ -769,8 +769,19 @@ export class BaseAgent {
 
   /**
    * 添加消息到对话历史，带 Ring Buffer 保护
+   * #2 优化：在压缩前对大 tool_result 做提前裁剪，减少内存峰值
    */
   addMessage(msg: ChatMessage): void {
+    // #2: tool_result 提前裁剪 — 超长 tool 输出只保留摘要，减少压缩前内存常驻
+    if (msg.role === 'tool' && typeof msg.content === 'string') {
+      const contentBytes = Buffer.byteLength(msg.content, 'utf8');
+      const TRUNCATE_THRESHOLD = 512 * 1024; // 512KB
+      if (contentBytes > TRUNCATE_THRESHOLD) {
+        const keep = msg.content.slice(0, TRUNCATE_THRESHOLD);
+        msg = { ...msg, content: keep + `\n\n[...tool output truncated: ${contentBytes} bytes total, kept first ${TRUNCATE_THRESHOLD} bytes]` };
+        agentLogger.debug(`Agent ${this.name} tool_result truncated from ${contentBytes} to ${TRUNCATE_THRESHOLD} bytes`);
+      }
+    }
     const before = this.messages.length;
     this.messages = this.contextController.addMessage(msg, this.messages);
     if (before >= MAX_AGENT_MESSAGES || this.messages.length < before + 1) {

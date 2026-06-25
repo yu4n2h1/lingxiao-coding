@@ -91,123 +91,14 @@ export function stripOldImageParts(
  */
 export function compactOldToolResults(
   messages: ChatMessage[],
-  options: { retainRecentTurns?: number; protectedCount?: number },
+  _options: { retainRecentTurns?: number; protectedCount?: number },
 ): ChatMessage[] {
-  const retainRecentTurns = Math.max(0, Math.floor(options.retainRecentTurns ?? 50));
-  const protectedCount = Math.max(0, Math.min(options.protectedCount ?? 0, messages.length));
-
-  if (retainRecentTurns <= 0 || messages.length === 0) {
-    return messages;
-  }
-
-  // 从后往前遍历，统计 assistant 消息数量，确定压缩边界
-  let assistantCount = 0;
-  let compressBefore = messages.length; // 这个索引之前的 tool results 需要压缩
-
-  for (let i = messages.length - 1; i >= protectedCount; i -= 1) {
-    if (messages[i].role === 'assistant') {
-      assistantCount += 1;
-      if (assistantCount > retainRecentTurns) {
-        // 超过保留轮数，这个 assistant 之前的 tool results 都压缩
-        compressBefore = i;
-        break;
-      }
-    }
-  }
-
-  // 保护区域始终不压缩
-  if (compressBefore < protectedCount) {
-    compressBefore = protectedCount;
-  }
-
-  return messages.map((message, index) => {
-    // 保护区域或在保留范围内，不压缩
-    if (index < protectedCount || index >= compressBefore) {
-      return message;
-    }
-
-    // 检查是否是 tool_result 消息
-    const isToolResult =
-      message.role === 'tool' ||
-      (message.role === 'user' && Array.isArray(message.content) && message.content.some((part) => {
-        if (typeof part === 'object' && part !== null) {
-          const typedPart = part as { type?: string };
-          return typedPart.type === 'tool_result';
-        }
-        return false;
-      }));
-
-    if (!isToolResult) {
-      return message;
-    }
-
-    // 压缩 tool_result 消息
-    if (message.role === 'tool') {
-      return compactToolResultMessage(message);
-    }
-
-    if (message.role === 'user' && Array.isArray(message.content)) {
-      return {
-        ...message,
-        content: message.content.map((part) => {
-          if (typeof part === 'object' && part !== null) {
-            const typedPart = part as { type?: string };
-            if (typedPart.type === 'tool_result') {
-              return compactToolResultContent(part);
-            }
-          }
-          return part;
-        }),
-      };
-    }
-
-    return message;
-  });
-}
-
-/**
- * 压缩单个 tool_result 消息，保留元信息
- */
-function compactToolResultMessage(message: ChatMessage): ChatMessage {
-  const originalContent = typeof message.content === 'string' ? message.content : JSON.stringify(message.content);
-  const originalBytes = Buffer.byteLength(originalContent, 'utf8');
-
-  const toolCallId = (message as { tool_call_id?: string }).tool_call_id ?? 'unknown';
-  const timestamp = message.timestamp ? new Date(message.timestamp * 1000).toISOString() : 'unknown';
-
-  const placeholder = `[Tool result compacted - ID: ${toolCallId}, Size: ${formatBytes(originalBytes)}, Time: ${timestamp}]`;
-
-  return {
-    ...message,
-    content: placeholder,
-  };
-}
-
-/**
- * 压缩 tool_result 内容块（Anthropic 格式）
- */
-function compactToolResultContent(part: any): any {
-  const originalContent = typeof part.content === 'string' ? part.content : JSON.stringify(part.content);
-  const originalBytes = Buffer.byteLength(originalContent, 'utf8');
-
-  const toolUseId = part.tool_use_id ?? 'unknown';
-  const isError = part.is_error ?? false;
-
-  const placeholder = `[Tool result compacted - ID: ${toolUseId}, Size: ${formatBytes(originalBytes)}, Error: ${isError}]`;
-
-  return {
-    ...part,
-    content: placeholder,
-  };
-}
-
-/**
- * 格式化字节数为可读字符串
- */
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes}B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+  // 压缩注入已禁用：此前该函数会把所有 tool_result 无差别替换为
+  // `[Tool result compacted - ID: ..., Size: ...]` 占位符，导致模型完全无法
+  // 读取任何工具输出（连最新一轮也被命中）。此处原样返回，不再做任何替换。
+  // 若未来需要恢复按轮次压缩，请重新实现下方的 per-message 替换逻辑，并
+  // 确保只在“超过 retainRecentTurns 的旧轮次”上生效，而非全部消息。
+  return messages;
 }
 
 
