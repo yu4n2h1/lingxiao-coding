@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { browserClient } from '../../api/BrowserClient';
 import { useBrowserStore } from '../../stores/browserStore';
+import { getServerToken } from '../../api/headers';
 
 interface BrowserDockProps {
   workspaceName?: string;
@@ -343,76 +344,62 @@ export default function BrowserDock({ workspaceName, onInsertPrompt, onSendPromp
             <span>{health?.executableExists ? t('browser.health.ready', 'Runtime ready') : t('browser.health.setup', 'Runtime setup')}</span>
             <small>{health?.resolvedExecutablePath || health?.expectedExecutablePath || healthError || t('browser.health.noExecutable', 'No browser executable detected')}</small>
           </div>
-          {health?.resolvedExecutableSource && (
-            <small className="browser-health-note">{health.resolvedExecutableSource}</small>
-          )}
-          {health && !health.playwrightCliExists && (
-            <small className="browser-health-note">Playwright CLI missing</small>
-          )}
-          {health && health.detectedCandidates.length > 0 && !health.executableExists && (
-            <small className="browser-health-note">{health.detectedCandidates.length} candidates checked</small>
-          )}
-          {!health?.executableExists && health?.installCommand && (
-            <code>{health.installCommand}</code>
-          )}
-          {health?.installDepsCommand && !health.executableExists && (
-            <code>{health.installDepsCommand}</code>
-          )}
-          {health?.diagnostics.map((item) => (
-            <small key={item} className="browser-health-note">{item}</small>
-          ))}
+          {health?.resolvedExecutableSource && <small>source: {health.resolvedExecutableSource}</small>}
+          {health?.installCommand && !health.executableExists && <code>{health.installCommand}</code>}
+          {health?.installDepsCommand && !health.executableExists && <code>{health.installDepsCommand}</code>}
+          {health?.diagnostics.map((item) => <small key={item} className="browser-health-note">{item}</small>)}
         </div>
       )}
 
       <div className={`browser-workspace ${selection ? 'has-selection' : ''}`}>
         <div className="browser-preview-column">
-          {/* 截图模式 + 键盘输入转发 */}
-          <div
-            className={`browser-viewport ${interactionMode === 'inspect' || isInspecting ? 'is-inspecting' : 'is-clickable'}`}
-            onClick={handleViewportClick}
-            onWheel={handleViewportWheel}
-            tabIndex={0}
-            onKeyDown={(e) => {
-              if (e.key === 'Backspace') { e.preventDefault(); void pressKey('Backspace'); refreshScreenshot(); }
-              else if (e.key === 'Enter') { e.preventDefault(); void pressKey('Enter'); refreshScreenshot(); }
-              else if (e.key === 'Tab') { e.preventDefault(); void pressKey('Tab'); refreshScreenshot(); }
-              else if (e.key === 'Escape') { e.preventDefault(); void pressKey('Escape'); refreshScreenshot(); }
-              else if (e.key.length === 1) { e.preventDefault(); void typeText(e.key); refreshScreenshot(); }
-            }}
-            style={{ cursor: interactionMode === 'inspect' || isInspecting ? 'crosshair' : 'pointer' }}
-          >
-            {screenshotUrl ? (
-              <>
-                <img
-                  ref={imageRef}
-                  src={screenshotUrl}
-                  alt={session?.title || session?.url || 'Browser screenshot'}
-                  onLoad={() => {
-                    if (!session) return;
-                    setUrl(session.url && session.url !== 'about:blank' ? session.url : url);
-                  }}
-                  draggable={false}
-                />
-                {selection && <div className="browser-selection-box" style={selectionStyle} />}
-                {clickRipple && (
-                  <div
-                    className="browser-click-ripple"
-                    style={{ left: clickRipple.x, top: clickRipple.y }}
-                  />
-                )}
-                {isLoading && (
-                  <div className="browser-loading-overlay">
-                    <Loader2 size={20} className="animate-spin" />
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="browser-empty">
-                <Crosshair size={28} />
-                <span>{t('browser.empty', '打开页面后点击交互')}</span>
-              </div>
-            )}
-          </div>
+          {/* v1.0.5: 代理 iframe — 原生体验，点击/输入/滚动全部原生 */}
+          {session && session.url && session.url !== 'about:blank' ? (
+            <div className="browser-iframe-container">
+              <iframe
+                key={session.id + session.url}
+                src={`/api/v1/browser/proxy/${session.id}?token=${encodeURIComponent(getServerToken())}`}
+                className="browser-iframe"
+                title={session.title || session.url}
+                sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
+                allow="fullscreen; clipboard-read; clipboard-write"
+              />
+              {(interactionMode === 'inspect' || isInspecting) && (
+                <div className="browser-inspect-overlay" onClick={handleViewportClick} style={{ cursor: 'crosshair' }}>
+                  {isLoading && <div className="browser-loading-overlay"><Loader2 size={20} className="animate-spin" /></div>}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div
+              className={`browser-viewport ${interactionMode === 'inspect' || isInspecting ? 'is-inspecting' : 'is-clickable'}`}
+              onClick={handleViewportClick}
+              onWheel={handleViewportWheel}
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === 'Backspace') { e.preventDefault(); void pressKey('Backspace'); refreshScreenshot(); }
+                else if (e.key === 'Enter') { e.preventDefault(); void pressKey('Enter'); refreshScreenshot(); }
+                else if (e.key === 'Tab') { e.preventDefault(); void pressKey('Tab'); refreshScreenshot(); }
+                else if (e.key === 'Escape') { e.preventDefault(); void pressKey('Escape'); refreshScreenshot(); }
+                else if (e.key.length === 1) { e.preventDefault(); void typeText(e.key); refreshScreenshot(); }
+              }}
+              style={{ cursor: interactionMode === 'inspect' || isInspecting ? 'crosshair' : 'pointer' }}
+            >
+              {screenshotUrl ? (
+                <>
+                  <img ref={imageRef} src={screenshotUrl} alt={session?.title || session?.url || 'Browser'} draggable={false} />
+                  {selection && <div className="browser-selection-box" style={selectionStyle} />}
+                  {clickRipple && <div className="browser-click-ripple" style={{ left: clickRipple.x, top: clickRipple.y }} />}
+                  {isLoading && <div className="browser-loading-overlay"><Loader2 size={20} className="animate-spin" /></div>}
+                </>
+              ) : (
+                <div className="browser-empty">
+                  <Crosshair size={28} />
+                  <span>{t('browser.empty', '打开页面后点击交互')}</span>
+                </div>
+              )}
+            </div>
+          )}
           {session && (
             <div className="browser-page-meta">
               <span className="truncate">{session.title || 'Untitled'}</span>

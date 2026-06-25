@@ -316,6 +316,12 @@ export class BrowserRuntime {
   // ============================================================
   // v1.0.5 剑阁大改：真实交互能力
   // ============================================================
+  /** 获取页面信息 */
+  async getPageInfo(id: string): Promise<{ url: string; title: string }> {
+    const session = this.getSession(id);
+    session.lastUsedAt = Date.now();
+    return { url: session.page.url(), title: await session.page.title().catch(() => '') };
+  }
 
   /** 坐标点击：模拟真实用户点击 */
   async click(id: string, point: { x: number; y: number }): Promise<{ ok: true; url: string; title: string }> {
