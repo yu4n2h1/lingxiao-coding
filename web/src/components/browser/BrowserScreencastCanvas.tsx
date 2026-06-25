@@ -171,7 +171,7 @@ export function BrowserScreencastCanvas({ sessionId, width, height }: Screencast
         onCompositionEnd={handleInput}
         tabIndex={0}
       />
-      {/* Hidden input to capture keyboard + CJK */}
+      {/* Hidden input to capture CJK input */}
       <input
         ref={inputRef}
         style={{ position: 'absolute', left: -9999, opacity: 0 }}
