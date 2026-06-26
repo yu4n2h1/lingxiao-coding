@@ -630,8 +630,11 @@ async function startTUI(sessionId?: string, opts?: { tuiOnly?: boolean }): Promi
   // 关掉 Log.ts 的 ConsoleSink：它直写 process.stderr，绕过 muteConsole（只屏蔽 console.*）。
   // TUI 下任何 WARN/ERROR 日志直写终端会打乱 Ink log-update 的光标行数计算，
   // 使状态行无法原地刷新而反复重印（刷屏根因）。日志改为只落文件。
-  const { configureLogging } = await import('./core/Log.js');
-  configureLogging({ console: false, file: process.env.LINGXIAO_LOG_PATH || true });
+  // 统一日志配置口径：CLI 仍 console:false 防 TUI 污染，level/file/清理策略与 Web 共用一套默认。
+  const { configureCliLogging, ensureLogMaintenance } = await import('./runtime/LoggingRuntime.js');
+  configureCliLogging({ sessionId: currentSessionId });
+  // 启动定期日志清理（cleanupRegistry priority=50 + unref，进程内幂等），控制磁盘日志增长。
+  ensureLogMaintenance();
 
   // 清屏并隐藏光标（标准TUI行为）
   process.stdout.write('\x1b[2J\x1b[H');  // 清屏 + 光标归位
@@ -1288,6 +1291,40 @@ ${chalk.dim(t('cli.about_footer'))}
 `);
   });
 
+// ─── 诊断子命令 ──────────────────────────────────────────────────────────────
+program
+  .command('diagnose')
+  .alias('bug')
+  .description('生成可提交的诊断包：聚合 lingxiao.log 尾部 + 最新 crash + agent_logs + 环境信息（已脱敏）')
+  .option('-s, --session <id>', '关联的会话 ID（用于优先采集该 session 的 agent_logs）')
+  .option('--no-zip', '仅生成 markdown，不打包 zip')
+  .option('--json', '以 JSON 输出文件路径列表')
+  .action(async (opts: { session?: string; zip?: boolean; json?: boolean }) => {
+    // CLI 子命令独立运行，不进 TUI：保留 console 输出以便用户看到路径。
+    const { buildDiagnosticsBundle } = await import('./core/Diagnostics.js');
+    try {
+      const bundle = await buildDiagnosticsBundle({
+        sessionId: opts.session,
+        zip: opts.zip !== false,
+      });
+      if (opts.json) {
+        console.log(JSON.stringify({ files: bundle.files, bundlePath: bundle.bundlePath }, null, 2));
+      } else {
+        console.log(chalk.green('✓ 诊断包已生成（内容已脱敏）'));
+        if (bundle.files.length > 0) {
+          console.log(chalk.bold('\n生成的文件：'));
+          for (const f of bundle.files) console.log(`  • ${f}`);
+        } else {
+          console.log(chalk.yellow('注意：诊断文件落盘失败，请检查 ~/.lingxiao/logs 写入权限。'));
+        }
+        console.log(chalk.dim('\n可将 diagnostics-*.zip 或 diagnostics-*.md 附加到 GitHub issue。'));
+      }
+      process.exit(0);
+    } catch (err) {
+      console.error(chalk.red(`✗ 生成诊断包失败：${err instanceof Error ? err.message : String(err)}`));
+      process.exit(1);
+    }
+  });
 // ─── Daemon 子命令 ───────────────────────────────────────────────────────────
 const daemonCmd = program.command('daemon').description('管理凌霄后台常驻服务');
 

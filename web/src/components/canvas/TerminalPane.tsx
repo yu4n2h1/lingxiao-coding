@@ -15,6 +15,9 @@ import { getServerToken } from '../../api/headers';
 import { useThemeStore } from '../../stores/themeStore';
 import type { Terminal } from '@xterm/xterm';
 import type { FitAddon } from '@xterm/addon-fit';
+import { createLogger } from '../../utils/logger';
+const log = createLogger('TerminalPane');
+
 
 interface Props {
   terminalId: string;
@@ -98,7 +101,7 @@ export default function TerminalPane({ terminalId }: Props) {
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
             if (!disposed && fit) {
-              try { fit.fit(); } catch (err) { console.warn('[TerminalPane] Initial terminal fit failed:', err); }
+              try { fit.fit(); } catch (err) { log.warn('[TerminalPane] Initial terminal fit failed:', err); }
             }
           });
         });
@@ -137,7 +140,7 @@ export default function TerminalPane({ terminalId }: Props) {
                   ws.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }));
                 }
               } catch (err) {
-                console.warn('[TerminalPane] Failed to send initial terminal size:', err);
+                log.warn('[TerminalPane] Failed to send initial terminal size:', err);
               }
             }
           };
@@ -156,7 +159,7 @@ export default function TerminalPane({ terminalId }: Props) {
                 setStatus('lost');
               }
             } catch (err) {
-              console.warn('[TerminalPane] Failed to handle terminal message:', err);
+              log.warn('[TerminalPane] Failed to handle terminal message:', err);
             }
           };
 
@@ -204,7 +207,7 @@ export default function TerminalPane({ terminalId }: Props) {
               ws.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }));
             }
           } catch (err) {
-            console.warn('[TerminalPane] Failed to resize terminal:', err);
+            log.warn('[TerminalPane] Failed to resize terminal:', err);
           }
         }
       });
@@ -268,7 +271,7 @@ export default function TerminalPane({ terminalId }: Props) {
                       const dims = fitAddonRef.current.proposeDimensions();
                       if (dims) ws.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }));
                     } catch (err) {
-                      console.warn('[TerminalPane] Failed to send retry terminal size:', err);
+                      log.warn('[TerminalPane] Failed to send retry terminal size:', err);
                     }
                   }
                 };
@@ -279,7 +282,7 @@ export default function TerminalPane({ terminalId }: Props) {
                       xtermRef.current.write(msg.data);
                     }
                   } catch (err) {
-                    console.warn('[TerminalPane] Failed to handle retry terminal message:', err);
+                    log.warn('[TerminalPane] Failed to handle retry terminal message:', err);
                   }
                 };
                 ws.onclose = () => { if (!disposedRef.current) setStatus('disconnected'); };

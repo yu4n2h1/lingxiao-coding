@@ -64,7 +64,7 @@ import { BrowserRuntime } from './core/BrowserRuntime.js';
 import { ActiveSessionCoordinator } from './core/ActiveSessionCoordinator.js';
 import ws from '@fastify/websocket';
 import { FILE_PARSER } from './config/defaults.js';
-import { configureLogging } from './core/Log.js';
+import { configureWebLogging, ensureLogMaintenance } from './runtime/LoggingRuntime.js';
 import { writeWatchdog } from './core/EternalSupervisor.js';
 import { rateLimitExemptLocalhost, isHardenedMode } from './core/HardeningPolicy.js';
 import { processExists } from './utils/platform.js';
@@ -161,7 +161,10 @@ export async function createServer() {
   // 清理上次崩溃/非正常退出遗留的孤儿 Worker 进程（全量扫描 /proc，本进程的 Worker 尚未生成）。
   await WorkerProcessRunner.killOrphanWorkers();
 
-  configureLogging({ file: true });
+  // 统一日志配置口径：Web 保留 console sink，level/file/清理策略与 CLI 共用一套默认。
+  configureWebLogging();
+  // 启动定期日志清理（cleanupRegistry priority=50 + unref，进程内幂等），控制磁盘日志增长。
+  ensureLogMaintenance();
   const db = new DatabaseManager(runtimeConfig.paths.db_path);
   db.init();
 

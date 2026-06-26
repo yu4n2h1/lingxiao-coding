@@ -1,5 +1,6 @@
 import { EventEmitter as NodeEventEmitter } from 'events';
 import type { Task } from './TaskBoard.js';
+import { coreLogger } from './Log.js';
 import type { OrchestrationTaskMetadata, OrchestrationVerdict } from './OrchestrationTypes.js';
 import type { EdgeDefinition, ExecutionLog, NodeDefinition, WorkflowDefinition } from './workflow/types.js';
 import type { BusMessage, MessagePriority } from './MessageBus.js';
@@ -15,7 +16,6 @@ import type { AutonomyDecision } from '../contracts/types/AutonomyDecision.js';
 import type { TransportEnvelope } from './transport/Transport.js';
 import type { WorkerRecoveryPayload } from './AgentProtocol.js';
 import type { TokenUsageView } from '../types/canonical.js';
-import { coreLogger } from './Log.js';
 
 export type LeaderStatusKind = 'active' | 'idle' | 'waiting' | 'interrupted' | 'completed';
 
@@ -891,7 +891,7 @@ export class EventEmitter {
       return this.emitter.emit(event as string, data);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error('[EventEmitter] handler threw on "' + String(event) + '": ' + msg);
+      coreLogger.error('[EventEmitter] handler threw on "' + String(event) + '": ' + msg);
       return false;
     }
   }

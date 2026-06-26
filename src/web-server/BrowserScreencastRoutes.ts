@@ -85,7 +85,7 @@ export function registerBrowserScreencastRoutes(fastify: FastifyInstance, deps: 
       await cdpSession.send('Page.enable');
       await cdpSession.send('Page.startScreencast', {
         format: 'jpeg',
-        quality: 60,
+        quality: 90,
         everyNthFrame: 1,
       });
       coreLogger.info(`[Screencast] Started for session ${sessionId}`);
@@ -215,6 +215,18 @@ export function registerBrowserScreencastRoutes(fastify: FastifyInstance, deps: 
           }
           case 'navigate': {
             await browserRuntime.navigate(sessionId, msg.url);
+            break;
+          }
+          case 'resize': {
+            // 前端上报预览区实际像素尺寸，让浏览器 viewport 跟随，画面铺满不留黑边
+            const w = Number(msg.width);
+            const h = Number(msg.height);
+            if (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) {
+              try {
+                await browserRuntime.resizeViewport(sessionId, { width: w, height: h });
+                lastFrameTime = 0; // 立即推一帧新尺寸画面
+              } catch { /* resize 非致命 */ }
+            }
             break;
           }
           case 'refresh': {

@@ -39,6 +39,9 @@ import { AcpClient } from '../../api/AcpClient';
 import { getServerToken } from '../../api/headers';
 import { estimateTokens, formatTokenCount } from '../../utils/estimateTokens';
 import { SessionUpdateKind, subscribeSessionUpdateEvents } from '../../stores/sseStore';
+import { createLogger } from '../../utils/logger';
+const log = createLogger('WorkbenchSidePanel');
+
 
 export type WorkbenchTool = 'launcher' | 'browser' | 'review' | 'terminal' | 'artifact' | 'references' | 'worktrees' | 'side-chat' | 'files' | 'office';
 export type WorkbenchToolRequest = {
@@ -68,7 +71,7 @@ const logoSrc = `/logo.svg?v=${typeof __APP_VERSION__ === 'string' ? __APP_VERSI
 const WORKBENCH_DEFAULT_WIDTH = 560;
 const TerminalPane = lazy(() => import('../canvas/TerminalPane'));
 const ArtifactView = lazy(() => import('../artifacts/ArtifactView'));const FileCanvasCompact = lazy(() => import('./FileCanvasCompact'));
-const OfficeGeneratorCompact = lazy(() => import('./OfficeGeneratorCompact'));
+const OfficeCanvas = lazy(() => import('../office/OfficeCanvas'));
 
 function WorkbenchPaneLoading() {
   return (
@@ -88,7 +91,7 @@ function clampWorkbenchWidth(width: number, minWidth: number, maxWidth = getWork
 }
 
 function getWorkbenchMinWidth(tool: WorkbenchTool): number {
-  if (tool === 'browser') return 900;
+  if (tool === 'browser') return 480;
   if (tool === 'terminal') return 480;
   if (tool === 'artifact') return 560;
   if (tool === 'references') return 360;
@@ -100,7 +103,7 @@ function getWorkbenchMinWidth(tool: WorkbenchTool): number {
 }
 
 function getWorkbenchPreferredWidth(tool: WorkbenchTool, baseWidth: number): number {
-  if (tool === 'browser') return Math.max(baseWidth, 1280);
+  if (tool === 'browser') return Math.max(baseWidth, 720);
   if (tool === 'terminal') return Math.max(baseWidth, 560);
   if (tool === 'artifact') return Math.max(baseWidth, 620);
   if (tool === 'references') return Math.max(baseWidth, 420);
@@ -177,7 +180,7 @@ export default function WorkbenchSidePanel({
         return clampWorkbenchWidth(stored, getWorkbenchMinWidth('launcher'));
       }
     } catch (error) {
-      console.warn('[WorkbenchSidePanel] Failed to read stored panel width:', error);
+      log.warn('[WorkbenchSidePanel] Failed to read stored panel width:', error);
     }
     return WORKBENCH_DEFAULT_WIDTH;
   });
@@ -188,7 +191,7 @@ export default function WorkbenchSidePanel({
         return clampWorkbenchWidth(stored, getWorkbenchMinWidth('launcher'));
       }
     } catch (error) {
-      console.warn('[WorkbenchSidePanel] Failed to read stored panel width:', error);
+      log.warn('[WorkbenchSidePanel] Failed to read stored panel width:', error);
     }
     return WORKBENCH_DEFAULT_WIDTH;
   });
@@ -314,6 +317,14 @@ export default function WorkbenchSidePanel({
     if (!toolRequest) return;
     openToolTab(toolRequest.tool);
   }, [toolRequest?.id]);
+  // 监听 OfficeResultCard 的「在画布中打开」事件
+  useEffect(() => {
+    const handler = () => {
+      openToolTab('office');
+    };
+    window.addEventListener('lingxiao:open-office-canvas', handler);
+    return () => window.removeEventListener('lingxiao:open-office-canvas', handler);
+  }, []);
 
   useEffect(() => {
     if (!activeArtifact?.path && !activeArtifact?.url) return;
@@ -359,7 +370,7 @@ export default function WorkbenchSidePanel({
     try {
       localStorage.setItem('lingxiao_workbench_base_panel_width', String(basePanelWidth));
     } catch (error) {
-      console.warn('[WorkbenchSidePanel] Failed to persist panel width:', error);
+      log.warn('[WorkbenchSidePanel] Failed to persist panel width:', error);
     }
   }, [basePanelWidth]);
 
@@ -381,7 +392,7 @@ export default function WorkbenchSidePanel({
     try {
       handle.setPointerCapture(pointerId);
     } catch (error) {
-      console.warn('[WorkbenchSidePanel] Failed to capture resize pointer:', error);
+      log.warn('[WorkbenchSidePanel] Failed to capture resize pointer:', error);
     }
     const startX = event.clientX;
     const startWidth = panelWidth;
@@ -400,7 +411,7 @@ export default function WorkbenchSidePanel({
       try {
         if (handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId);
       } catch (error) {
-        console.warn('[WorkbenchSidePanel] Failed to release resize pointer:', error);
+        log.warn('[WorkbenchSidePanel] Failed to release resize pointer:', error);
       }
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
@@ -595,7 +606,7 @@ export default function WorkbenchSidePanel({
             ) : tab.tool === 'office' ? (
               <div className="min-h-0 flex-1 overflow-hidden">
                 <Suspense fallback={<WorkbenchPaneLoading />}>
-                  <OfficeGeneratorCompact />
+                  <OfficeCanvas />
                 </Suspense>
               </div>
             ) : (
@@ -1069,7 +1080,7 @@ function SideThreadPanel({
     try {
       await clientRef.current?.sendJsonRpc('session/cancel');
     } catch (error) {
-      console.warn('[WorkbenchSidePanel] Failed to cancel side session:', error);
+      log.warn('[WorkbenchSidePanel] Failed to cancel side session:', error);
     }
     setBusy(false);
     setStatus('ready');

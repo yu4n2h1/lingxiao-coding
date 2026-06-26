@@ -1,4 +1,5 @@
-import { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react';
+import { registerToastSink } from './toastBridge';
 
 export interface ToastAction {
   label: string;
@@ -45,6 +46,12 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     },
     [removeToast],
   );
+
+  // 注册到全局桥，让非组件上下文也能弹 toast
+  useEffect(() => {
+    registerToastSink(addToast);
+    return () => registerToastSink(null);
+  }, [addToast]);
 
   return (
     <ToastContext.Provider value={{ toasts, addToast, removeToast }}>
@@ -94,8 +101,9 @@ function ToastContainer({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id
           <button
             onClick={() => onDismiss(toast.id)}
             className="shrink-0 opacity-60 hover:opacity-100 transition-opacity"
+            aria-label="Dismiss"
           >
-            \u2715
+            {'\u2715'}
           </button>
         </div>
       ))}

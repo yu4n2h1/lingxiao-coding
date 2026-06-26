@@ -17,6 +17,7 @@
 
 import { PidRegistry, type PidEntry } from './PidRegistry.js';
 import { killProcess, processExists } from '../utils/platform.js';
+import { coreLogger } from './Log.js';
 
 export interface OrphanCleanResult {
   /** 清理的 PID 列表 */
@@ -56,7 +57,7 @@ export async function cleanOrphanInstances(
 
   if (candidates.length === 0) return result;
 
-  console.log(`[OrphanCleaner] 发现 ${candidates.length} 个同目录旧实例，尝试清理...`);
+  coreLogger.info(`[OrphanCleaner] 发现 ${candidates.length} 个同目录旧实例，尝试清理...`);
 
   // Phase 1: SIGTERM
   const termTargets: number[] = [];
@@ -97,7 +98,7 @@ export async function cleanOrphanInstances(
   }
 
   if (result.cleaned.length > 0) {
-    console.log(`[OrphanCleaner] 已清理 ${result.cleaned.length} 个僵尸实例: PIDs=${result.cleaned.join(',')}`);
+    coreLogger.info(`[OrphanCleaner] 已清理 ${result.cleaned.length} 个僵尸实例: PIDs=${result.cleaned.join(',')}`);
   }
 
   return result;

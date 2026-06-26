@@ -9,7 +9,7 @@ const rootPkg = JSON.parse(readFileSync(path.resolve(__dirname, '..', 'package.j
 const apiProxyTarget =
   process.env.LINGXIAO_WEB_PROXY_TARGET ||
   process.env.VITE_LINGXIAO_API_TARGET ||
-  'http://127.0.0.1:8080';
+  `http://127.0.0.1:${process.env.LINGXIAO_WEB_PORT || '8080'}`;
 const devHost = process.env.LINGXIAO_WEB_DEV_HOST || '127.0.0.1';
 const hmrHost = process.env.LINGXIAO_WEB_HMR_HOST || (devHost === '0.0.0.0' ? '127.0.0.1' : devHost);
 const hmrClientPort = process.env.LINGXIAO_WEB_HMR_CLIENT_PORT

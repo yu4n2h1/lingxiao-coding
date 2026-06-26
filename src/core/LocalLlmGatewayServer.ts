@@ -20,6 +20,7 @@ import { getConfigValue } from '../config.js';
 import { registerCleanup } from './CleanupRegistry.js';
 import { registerLocalLlmGatewayRoutes, type GatewayDeps } from '../web-server/LocalLlmGatewayRoutes.js';
 import { normalizeHost, readPositiveInt, setRuntimeGatewayEndpoint, clearRuntimeGatewayEndpoint } from './LocalLlmGateway.js';
+import { coreLogger } from './Log.js';
 
 export interface LocalLlmGatewayEndpoint {
   host: string;
@@ -98,7 +99,7 @@ export async function startLocalLlmGatewayServer(deps: GatewayDeps): Promise<Loc
   registerCleanup(close, 3.5);
 
   const model = String(getConfigValue('llm_gateway.model') || '').trim();
-  console.log(`[LocalLlmGateway] 网关监听已启动: ${host}:${actualPort} (model: ${model || '<未配置>'}${actualPort !== preferredPort ? `, 首选端口 ${preferredPort} 被占用, 随机回退` : ''})`);
+  coreLogger.info(`[LocalLlmGateway] 网关监听已启动: ${host}:${actualPort} (model: ${model || '<未配置>'}${actualPort !== preferredPort ? `, 首选端口 ${preferredPort} 被占用, 随机回退` : ''})`);
 
   return { ...endpointOf(host, actualPort), close };
 }

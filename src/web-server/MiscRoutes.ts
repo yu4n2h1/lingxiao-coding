@@ -80,8 +80,8 @@ const builtinDocs = [
     contentZh: '欢迎使用凌霄剑域（Lingxiao）。凌霄是一个支持 TUI 与 Web UI 的多智能体编程助手。\n\n运行 `lingxiao` 启动，然后在浏览器中打开 Web UI。\n\n使用侧边栏在各视图之间切换：对话、编辑器、画布、终端、追踪、工作线程等。',
     children: [
       { id: 'installation', title: 'Installation', titleZh: '安装',
-        content: '```bash\nnpm install -g lingxiao\nlingxiao\n```\n\nThe Web UI will be available at `http://localhost:8080`.',
-        contentZh: '```bash\nnpm install -g lingxiao\nlingxiao\n```\n\nWeb UI 将在 `http://localhost:8080` 可用。' },
+        content: '```bash\nnpm install -g lingxiao\nlingxiao\n```\n\nThe Web UI will be available at `http://localhost:<port>` (default random port; set `server.port` and `server.random_port=false` to pin).',
+        contentZh: '```bash\nnpm install -g lingxiao\nlingxiao\n```\n\nWeb UI 将在 `http://localhost:<端口>` 可用（默认随机端口；如需固定端口，设置 `server.port` 并将 `server.random_port` 设为 `false`）。' },
       { id: 'configuration', title: 'Configuration', titleZh: '配置',
         content: 'Settings are stored in `~/.lingxiao/settings.json`. Use the Settings view in the Web UI or the `/config` command in TUI.\n\nKey settings:\n- `llm.provider` — LLM provider (openai, anthropic, auto)\n- `llm.leader_model` — Model for the leader agent\n- `llm.enable_extended_thinking` — Enable deep thinking mode',
         contentZh: '设置存储在 `~/.lingxiao/settings.json`。使用 Web UI 中的设置视图或 TUI 中的 `/config` 命令进行修改。\n\n关键设置：\n- `llm.provider` — LLM 提供商（openai、anthropic、auto）\n- `llm.leader_model` — 主智能体使用的模型\n- `llm.enable_extended_thinking` — 启用深度思考模式' },

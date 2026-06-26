@@ -25,6 +25,7 @@ import {
   clearUncaughtSuppression,
   popSuppressedError,
 } from '../core/RuntimeGuards.js';
+import { llmLogger } from '../core/Log.js';
 
 // ==================== 常量 ====================
 
@@ -165,7 +166,7 @@ export async function ocrImage(url: string, index: number): Promise<string | nul
 
   // 快速检查 tessdata 是否可用
   if (!isTessdataAvailable()) {
-    console.warn('[OCR] tessdata not available at', LOCAL_TESSDATA_DIR);
+    llmLogger.warn('[OCR] tessdata not available at', LOCAL_TESSDATA_DIR);
     return null;
   }
 
@@ -231,7 +232,7 @@ export async function ocrImage(url: string, index: number): Promise<string | nul
     }
   } catch (err) {
     // OCR 失败，不缓存，返回 null 让调用方用占位符
-    console.warn('[OCR] Failed:', err instanceof Error ? err.message : err);
+    llmLogger.warn('[OCR] Failed:', err instanceof Error ? err.message : err);
     return null;
   }
 }
@@ -334,7 +335,7 @@ export async function applyLocalVisionFallback(
     return messages;
   }
 
-  console.log(`[VisionFallback] Model ${model} does not support vision, applying OCR fallback...`);
+  llmLogger.info(`[VisionFallback] Model ${model} does not support vision, applying OCR fallback...`);
   onProgress?.({ elapsed: 0, status: '正在对图片执行本地 OCR 识别...' });
 
   const startTime = Date.now();

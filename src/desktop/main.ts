@@ -7,8 +7,8 @@ import { generateDefaultSettings, config as runtimeConfig } from '../config.js';
 import { createServer, findAvailablePort, removePortFile, warnIfInsecureHostBinding, writePortFile } from '../server.js';
 import { registerCleanup, runAllCleanups } from '../core/index.js';
 import { isHardenedMode } from '../core/HardeningPolicy.js';
-
-let mainWindow: BrowserWindow | null = null;
+import { createLogger } from '../core/Log.js';
+const desktopLogger = createLogger('lingxiao.desktop');let mainWindow: BrowserWindow | null = null;
 let shutdownStarted = false;
 
 const TRUTHY_ENV_VALUES = new Set(['1', 'true', 'yes', 'on']);
@@ -50,7 +50,7 @@ async function setupAutoUpdater(): Promise<void> {
     const mod = await import('electron-updater');
     autoUpdater = mod.autoUpdater;
   } catch {
-    console.warn('[Updater] electron-updater 不可用，跳过自动更新。');
+    desktopLogger.warn('[Updater] electron-updater unavailable, skipping auto-update');
     return;
   }
 
@@ -58,24 +58,24 @@ async function setupAutoUpdater(): Promise<void> {
   autoUpdater.autoInstallOnAppQuit = true;
 
   autoUpdater.on('checking-for-update', () => {
-    console.log('[Updater] 正在检查更新...');
+    desktopLogger.info('[Updater] 正在检查更新...');
   });
 
   autoUpdater.on('update-available', (info) => {
-    console.log(`[Updater] 发现新版本: ${info.version}，开始下载...`);
+    desktopLogger.info('[Updater] 发现新版本，开始下载...', { version: info.version });
   });
 
   autoUpdater.on('update-not-available', () => {
-    console.log('[Updater] 当前版本已是最新。');
+    desktopLogger.info('[Updater] 当前版本已是最新。');
   });
 
   autoUpdater.on('download-progress', (progress) => {
     const percent = progress.percent.toFixed(1);
-    console.log(`[Updater] 下载中: ${percent}% (${progress.transferred}/${progress.total} bytes)`);
+    desktopLogger.info('[Updater] 下载中', { percent, transferred: progress.transferred, total: progress.total });
   });
 
   autoUpdater.on('update-downloaded', () => {
-    console.log('[Updater] 更新已下载，将在退出时自动安装。');
+    desktopLogger.info('[Updater] 更新已下载，将在退出时自动安装。');
     // 通知主窗口展示更新提示（通过 webContents executeJavaScript 注入 toast）
     if (mainWindow && !updateNotificationShown) {
       updateNotificationShown = true;
@@ -86,7 +86,7 @@ async function setupAutoUpdater(): Promise<void> {
   });
 
   autoUpdater.on('error', (err) => {
-    console.error('[Updater] 检查更新失败:', err?.message || err);
+    desktopLogger.error('[Updater] 检查更新失败', { error: err?.message || String(err) });
   });
 
   // 启动后 5 秒检查更新，之后每 4 小时检查一次
@@ -215,6 +215,6 @@ void app.whenReady().then(async () => {
     }
   });
 }).catch((err: unknown) => {
-  console.error('[Desktop] Failed to start:', err);
+  desktopLogger.error('[Desktop] Failed to start', { error: String(err) });
   app.quit();
 });

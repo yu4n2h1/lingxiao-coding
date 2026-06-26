@@ -80,37 +80,88 @@ export function BrowserScreencastCanvas({ sessionId, width, height }: Screencast
     }
   }, []);
 
+  // 预览区尺寸变化时上报后端，让浏览器 viewport 跟随，画面铺满不留黑边。
+  // debounce 避免拖动面板时高频重排浏览器视口。
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || !connected) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const report = () => {
+      const rect = el.getBoundingClientRect();
+      const w = Math.round(rect.width);
+      const h = Math.round(rect.height);
+      if (w > 0 && h > 0) sendMsg({ type: 'resize', width: w, height: h });
+    };
+    const observer = new ResizeObserver(() => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(report, 220);
+    });
+    observer.observe(el);
+    report(); // 连接建立后立即同步一次当前尺寸
+    return () => {
+      if (timer) clearTimeout(timer);
+      observer.disconnect();
+    };
+  }, [connected, sendMsg]);
+
   // Coordinate mapping: canvas displayed size -> viewport coordinates
+  // canvas 用 object-fit: contain 等比居中显示，位图与 CSS 盒子宽高比通常不同，
+  // 会产生留边（letterbox）。必须把缩放比和居中偏移算进去，否则点击坐标整体偏移、点不准。
   const getCoords = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
     const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
+    if (rect.width === 0 || rect.height === 0) return { x: 0, y: 0 };
+    // object-fit: contain 的实际显示缩放比 = 取较小的一边
+    const scale = Math.min(rect.width / canvas.width, rect.height / canvas.height);
+    const displayedWidth = canvas.width * scale;
+    const displayedHeight = canvas.height * scale;
+    // 居中产生的留边偏移
+    const offsetX = (rect.width - displayedWidth) / 2;
+    const offsetY = (rect.height - displayedHeight) / 2;
+    // 反算回位图（= 视口）坐标，并夹紧到有效范围
+    const dpr = width > 0 ? canvas.width / width : 1;
+    const x = (e.clientX - rect.left - offsetX) / scale / dpr;
+    const y = (e.clientY - rect.top - offsetY) / scale / dpr;
     return {
-      x: (e.clientX - rect.left) * scaleX,
-      y: (e.clientY - rect.top) * scaleY,
+      x: Math.max(0, Math.min(width, x)),
+      y: Math.max(0, Math.min(height, y)),
     };
   };
 
   // Mouse events
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    // 阻止默认行为，防止 canvas 上启动文本选择/拖拽
+    e.preventDefault();
+    // 点击时让 canvas 获得焦点，否则 onKeyDown/onKeyUp 收不到键盘事件
+    e.currentTarget.focus();
     const { x, y } = getCoords(e);
     sendMsg({ type: 'mouse', x, y, button: e.button === 2 ? 'right' : 'left', action: 'down' });
   };
   const handleMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
     const { x, y } = getCoords(e);
     sendMsg({ type: 'mouse', x, y, button: e.button === 2 ? 'right' : 'left', action: 'up' });
   };
+
+  // Mouse move 节流：用 ref + 时间戳限制发送频率，避免 WebSocket/CDP 过载
+  const lastMoveTime = useRef(0);
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const now = Date.now();
+    if (now - lastMoveTime.current < 16) return; // ~60fps 上限
+    lastMoveTime.current = now;
     const { x, y } = getCoords(e);
     sendMsg({ type: 'mouse', x, y, action: 'move' });
   };
+
   const handleDblClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
     const { x, y } = getCoords(e);
     sendMsg({ type: 'mouse', x, y, action: 'dblclick' });
   };
   const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
+    // 阻止默认行为，防止本地容器滚动（overflow-y:auto 会抢走滚轮）
+    e.preventDefault();
     const { x, y } = getCoords(e);
     sendMsg({ type: 'scroll', x, y, deltaX: e.deltaX, deltaY: e.deltaY });
   };
@@ -122,10 +173,13 @@ export function BrowserScreencastCanvas({ sessionId, width, height }: Screencast
 
   // Keyboard events — forward all to CDP
   const handleKeyDown = (e: React.KeyboardEvent<HTMLCanvasElement>) => {
-    // 不 preventDefault，避免吞掉地址栏等其它元素的键盘事件
+    // 阻止默认行为：Tab 不跳焦点、Space 不滚动本地页面、Backspace 不导航后退、方向键不滚动本地页面
+    // 事件绑定在 canvas 上，只在 canvas 获焦时触发，不会影响地址栏等其它元素
+    e.preventDefault();
     sendMsg({ type: 'key', key: e.key, action: 'down' });
   };
   const handleKeyUp = (e: React.KeyboardEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
     sendMsg({ type: 'key', key: e.key, action: 'up' });
   };
   const handleInput = (e: React.CompositionEvent<HTMLCanvasElement>) => {

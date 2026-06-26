@@ -27,6 +27,7 @@ import {
 } from '../../core/BrowserProvider.js';
 import { registerCleanup } from '../../core/CleanupRegistry.js';
 import { rememberBrowserVersion, buildStealthUserAgent, buildStealthInitScript } from '../../core/BrowserStealth.js';
+import { coreLogger } from '../../core/Log.js';
 
 export type { BrowserHealth, BrowserProxyConfig as ProxyConfig } from '../../core/BrowserProvider.js';
 export {
@@ -124,7 +125,7 @@ const SELECTOR_TIMEOUT_MS = TIMEOUT.BROWSER_SELECTOR_MS;
 const NETWORK_IDLE_MS = TIMEOUT.BROWSER_NETWORK_IDLE_MS;
 const SEARCH_NETWORK_IDLE_MS = TIMEOUT.BROWSER_SEARCH_NETWORK_IDLE_MS;
 
-const debug = (msg: string) => process.env.DEBUG_BROWSER && console.error(`[Browser] ${msg}`);
+const debug = (msg: string) => process.env.DEBUG_BROWSER && coreLogger.debug(`[Browser] ${msg}`);
 
 function buildDefaultContextOptions(overrides?: BrowserContextOptions): BrowserContextOptions {
   return {

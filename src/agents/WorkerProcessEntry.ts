@@ -20,6 +20,7 @@ import type { TokenUsageView } from '../types/canonical.js';
 import type { BusMessageType } from '../core/BusMessageTypes.js';
 import type { AgentExecutionResult } from './AgentExecutionResult.js';
 import { agentLogger } from '../core/Log.js';
+import { writeCrashReport } from '../core/CrashReporter.js';
 import { classifyDbClosedWorkerFailure } from './WorkerDbClosedClassification.js';
 
 // 检查是否在子进程中运行
@@ -215,6 +216,21 @@ function registerSignalHandlers() {
     }
     // 不可恢复：发送 failed 通知后退出
     console.error(`[Worker ${payload.agentName}] Fatal uncaughtException:`, error);
+    // 结构化崩溃落盘（best-effort，永不抛）。source 用 CrashReporter 枚举中的 'worker'，
+    // 具体来源/上下文（agentName/taskId/sessionId）进 extra 便于排查。
+    try {
+      const crashPath = writeCrashReport({
+        error,
+        source: 'worker',
+        sessionId: payload.sessionId,
+        extra: {
+          agentName: payload.agentName,
+          taskId: payload.taskId,
+          phase: 'worker-uncaughtException',
+        },
+      });
+      if (crashPath) console.error(`[Worker ${payload.agentName}] 崩溃报告已保存: ${crashPath}`);
+    } catch { /* crash report best-effort */ }
     sendMessage({
       type: 'failed',
       timestamp: Date.now(),

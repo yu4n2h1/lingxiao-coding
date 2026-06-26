@@ -13,6 +13,7 @@
  */
 
 import { gracefulShutdown, isGracefulShuttingDown } from './RuntimeGuards.js';
+import { coreLogger } from './Log.js';
 
 export interface ProcessIdleGuardConfig {
   /** 全 idle 自动退出阈值 (ms)。默认 10 分钟。设为 0 或 Infinity 禁用。 */
@@ -195,7 +196,7 @@ export class ProcessIdleGuard {
     }
 
     if (shouldExit) {
-      console.log(`[ProcessIdleGuard] Auto-exit: ${reason}`);
+      coreLogger.info(`[ProcessIdleGuard] Auto-exit: ${reason}`);
       this.stop();
       void gracefulShutdown(0, 10_000);
     }

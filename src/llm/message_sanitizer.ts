@@ -1,5 +1,6 @@
 import type { ChatMessage, MessageContent, MessageContentPart, ToolCall } from './types.js';
 import { isEmptyContent, contentToPlainText } from './types.js';
+import { llmLogger } from '../core/Log.js';
 
 function cloneToolCallWithId(toolCall: ToolCall, fallbackId: string): ToolCall {
   return {
@@ -342,17 +343,17 @@ export function sanitizeMessageSequence(messages: ChatMessage[]): ChatMessage[] 
 
   // 如果有变化，打印统计日志
   if (afterCount !== beforeCount || JSON.stringify(beforeRoles) !== JSON.stringify(afterRoles)) {
-    console.log(`[MessageSanitizer] before=${beforeCount} after=${afterCount} beforeRoles=${JSON.stringify(beforeRoles)} afterRoles=${JSON.stringify(afterRoles)}`);
+    llmLogger.debug(`[MessageSanitizer] before=${beforeCount} after=${afterCount} beforeRoles=${JSON.stringify(beforeRoles)} afterRoles=${JSON.stringify(afterRoles)}`);
 
     const mergedAssistants = beforeRoles.assistant - afterRoles.assistant;
     const mergedUsers = beforeRoles.user - afterRoles.user;
     const coalescedSystems = beforeRoles.system - afterRoles.system;
     const removedTools = beforeRoles.tool - afterRoles.tool;
 
-    if (mergedAssistants > 0) console.log(`  mergedAssistants=${mergedAssistants}`);
-    if (mergedUsers > 0) console.log(`  mergedUsers=${mergedUsers}`);
-    if (coalescedSystems > 0) console.log(`  coalescedSystems=${coalescedSystems}`);
-    if (removedTools > 0) console.log(`  removedOrphanTools=${removedTools}`);
+    if (mergedAssistants > 0) llmLogger.debug(`  mergedAssistants=${mergedAssistants}`);
+    if (mergedUsers > 0) llmLogger.debug(`  mergedUsers=${mergedUsers}`);
+    if (coalescedSystems > 0) llmLogger.debug(`  coalescedSystems=${coalescedSystems}`);
+    if (removedTools > 0) llmLogger.debug(`  removedOrphanTools=${removedTools}`);
   }
 
   return final;

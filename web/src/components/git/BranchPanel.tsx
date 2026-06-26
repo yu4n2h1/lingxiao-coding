@@ -3,6 +3,10 @@ import { useTranslation } from 'react-i18next';
 import { GitBranch, Plus, Trash2, RefreshCw, Check, ChevronRight, AlertTriangle, X } from 'lucide-react';
 import { useGitStore, type GitBranch as GitBranchType } from '../../stores/gitStore';
 import ConfirmationDialog from '../ui/ConfirmationDialog';
+import { toast } from '../ui/toastBridge';
+import { createLogger } from '../../utils/logger';
+const log = createLogger('BranchPanel');
+
 
 /**
  * 从 "origin/feature/foo" 这样的 remote 分支名里剥掉 remote 前缀，
@@ -66,8 +70,10 @@ export default function BranchPanel() {
       await createBranch(newBranchName.trim());
       setNewBranchName('');
       setShowCreate(false);
+      toast.success(t('git.branchCreated', '分支已创建'));
     } catch (e) {
-      console.error(e);
+      log.error(e);
+      toast.fromError(e, t('git.branchCreateFailed', '创建分支失败'));
     }
   };
 
@@ -82,6 +88,9 @@ export default function BranchPanel() {
     setDeletingBranch(name);
     try {
       await deleteBranch(name);
+      toast.success(t('git.branchDeleted', '分支已删除'));
+    } catch (e) {
+      toast.fromError(e, t('git.branchDeleteFailed', '删除分支失败'));
     } finally {
       setDeletingBranch(null);
     }

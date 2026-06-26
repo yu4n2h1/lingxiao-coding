@@ -3,6 +3,7 @@
 
 import { acpClient, type ConnectionStateEvent } from '../api/AcpClient';
 import { getServerToken } from '../api/headers';
+import { createLogger } from '../utils/logger';
 import i18n from '../i18n';
 import { appendMessage, updateMessage } from '../utils/historyDB';
 import type { ProjectBlueprint } from '../types/blueprint';
@@ -39,6 +40,7 @@ import type {
   AgentActivity,
   AgentConversation,
   AgentMessage,
+  HistoryMessageRow,
   Message,
   SessionRuntimeSnapshot,
   SessionState,
@@ -73,6 +75,8 @@ export function _injectSessionStore(store: typeof UseSessionStoreType) {
   _useSessionStore = store;
 }
 function getStore() { return _useSessionStore; }
+
+const log = createLogger('sseStore');
 
 type UnknownRecord = Record<string, unknown>;
 type EventToolCallFunction = { name?: unknown; arguments?: unknown };
@@ -844,7 +848,7 @@ async function resyncAgentsSnapshot(sessionId: string): Promise<void> {
     });
     if (controller.signal.aborted) return;
     if (!res.ok) {
-      console.warn('[resyncAgentsSnapshot] failed:', res.status, await res.text().catch(() => ''));
+      log.warn('[resyncAgentsSnapshot] failed:', res.status, await res.text().catch(() => ''));
       return;
     }
     const json = await res.json();
@@ -856,9 +860,44 @@ async function resyncAgentsSnapshot(sessionId: string): Promise<void> {
       getStore().setState((s) => mergeAgentHistoryIntoState(s, agentConvs));
     }
   } catch (e: unknown) {
-    if (e instanceof Error && e.name !== 'AbortError') { console.warn('[resyncAgentsSnapshot] failed:', e.message); }
+    if (e instanceof Error && e.name !== 'AbortError') { log.warn('[resyncAgentsSnapshot] failed:', e.message); }
   } finally {
     if (agentsSnapshotController === controller) agentsSnapshotController = null;
+  }
+}
+
+let messagesResyncController: AbortController | null = null;
+
+// Re-pull the main chat message history on RECONNECT. SSE is a pure incremental
+// stream: any leader/TUI messages produced while the socket was dead are lost and
+// never replayed on reconnect — manifesting as "web 不同步，要刷新才有". connectToSession
+// pulls /messages on a fresh connect/switch, but silent mid-session reconnects never did.
+// Guard with pendingStreamIsEmpty so we never clobber an in-flight streaming response.
+async function resyncMessagesHistory(sessionId: string): Promise<void> {
+  // Don't overwrite an actively streaming buffer; the stream itself stays authoritative.
+  if (!pendingStreamIsEmpty()) return;
+  if (messagesResyncController) messagesResyncController.abort();
+  const controller = new AbortController();
+  messagesResyncController = controller;
+  try {
+    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, {
+      headers: { 'x-lingxiao-token': getServerToken() },
+      signal: controller.signal,
+    });
+    if (controller.signal.aborted) return;
+    if (!res.ok) return;
+    const history = await res.json();
+    if (controller.signal.aborted) return;
+    if (getStore().getState().sessionId !== sessionId) return;
+    // Re-check the streaming guard after the await — a stream may have started mid-fetch.
+    if (!pendingStreamIsEmpty()) return;
+    if (Array.isArray(history) && history.length > 0) {
+      getStore().getState().loadMessagesFromHistory(history as HistoryMessageRow[]);
+    }
+  } catch (e: unknown) {
+    if (e instanceof Error && e.name !== 'AbortError') { log.warn('[resyncMessagesHistory] failed:', e.message); }
+  } finally {
+    if (messagesResyncController === controller) messagesResyncController = null;
   }
 }
 
@@ -921,6 +960,11 @@ export function ensureSseListener() {
         agentResyncAcc = resyncDecision.acc;
         if (resyncDecision.resync) {
           resyncAgentsSnapshot(currentSessionId).catch(() => {});
+          // 同样在 RECONNECT 时补拉主聊天消息历史。SSE 是纯增量流，断连期间
+          // TUI 侧产生的聊天消息不会重放，重连后若不补拉就丢失 —— 表现为
+          // "web 与 TUI 不同步，要刷新才出现"。resyncMessagesHistory 内部有
+          // 流式安全闸门，正在流式输出时跳过，避免冲掉正在生成的内容。
+          resyncMessagesHistory(currentSessionId).catch(() => {});
         }
         syncRuntimeSnapshotFromAcp(currentSessionId).catch(() => {});
       }
@@ -933,15 +977,15 @@ export function ensureSseListener() {
 
   subscribeSessionUpdateEvents(acpClient, ({ eventData, envelope, eventType, kind, update, sessionId: eventSessionId }) => {
     const store = getStore().getState();
-    if (import.meta.env.DEV && update) console.log('[SSE recv]', eventType ?? kind ?? 'unknown', debugUpdateContent(update));
+    if (update) log.debug('[SSE recv]', eventType ?? kind ?? 'unknown', debugUpdateContent(update));
     const activeConnectionSessionId = acpClient.getSessionId?.() ?? acpClient.sessionId;
     if (activeConnectionSessionId && store.sessionId && activeConnectionSessionId !== store.sessionId) {
-      if (import.meta.env.DEV) console.warn('[SSE drop stale] conn=', activeConnectionSessionId?.slice(0,8), 'store=', store.sessionId?.slice(0,8));
+      log.debug('[SSE drop stale] conn=', activeConnectionSessionId?.slice(0,8), 'store=', store.sessionId?.slice(0,8));
       return;
     }
     if (!update) return;
     if (eventSessionId && store.sessionId && eventSessionId !== store.sessionId) {
-      if (import.meta.env.DEV) console.warn('[SSE drop session mismatch] event=', eventSessionId.slice(0,8), 'store=', store.sessionId.slice(0,8));
+      log.debug('[SSE drop session mismatch] event=', eventSessionId.slice(0,8), 'store=', store.sessionId.slice(0,8));
       return;
     }
 
@@ -1056,14 +1100,12 @@ function handleSessionUpdate(store: SessionState, update: SessionEventPayload, d
         // 且时间戳接近，则认为是重复。这解决了首条消息和附件消息重复渲染的问题。
 
         // 调试：记录 SSE UserMessage 事件
-        if (import.meta.env.DEV) {
-          console.log('[SSE UserMessage] Received:', {
-            id: umId,
-            content: umContent.substring(0, 50),
-            timestamp: umTimestamp,
-            recentUserMessages: getRecentUserMessages(msgs),
-          });
-        }
+        log.debug('[SSE UserMessage] Received:', {
+          id: umId,
+          content: umContent.substring(0, 50),
+          timestamp: umTimestamp,
+          recentUserMessages: getRecentUserMessages(msgs),
+        });
 
         for (let i = msgs.length - 1; i >= 0 && i >= msgs.length - 5; i--) {
           const m = msgs[i];
@@ -1072,21 +1114,17 @@ function handleSessionUpdate(store: SessionState, update: SessionEventPayload, d
             if (m.content === umContent ||
                 (umContent && m.content.startsWith(umContent)) ||
                 (m.content && umContent.startsWith(m.content))) {
-              if (import.meta.env.DEV) {
-                console.log('[SSE UserMessage] Duplicate detected, skipping:', {
-                  existingId: m.id,
-                  existingContent: m.content.substring(0, 50),
-                  incomingContent: umContent.substring(0, 50),
-                });
-              }
+              log.debug('[SSE UserMessage] Duplicate detected, skipping:', {
+                existingId: m.id,
+                existingContent: m.content.substring(0, 50),
+                incomingContent: umContent.substring(0, 50),
+              });
               return s;
             }
           }
         }
 
-        if (import.meta.env.DEV) {
-          console.log('[SSE UserMessage] No duplicate found, adding message');
-        }
+        log.debug('[SSE UserMessage] No duplicate found, adding message');
 
         return { messages: trimMessageWindow([...msgs, { id: umId, role: 'user' as const, content: umContent, timestamp: umTimestamp, isStreaming: false, retrying: false }]) };
       });
@@ -1525,10 +1563,10 @@ function handleSessionUpdatePart5(store: SessionState, update: SessionEventPaylo
       });
       break;
     case SessionUpdateKind.BlackboardDelta:
-      try { useBlackboardStore.getState().applyDelta({ changedNodes: update.changedNodes || [], changedEdges: update.changedEdges || [] }); } catch (err) { if (import.meta.env.DEV) console.warn('[blackboard_delta] applyDelta failed', err); }
+      try { useBlackboardStore.getState().applyDelta({ changedNodes: update.changedNodes || [], changedEdges: update.changedEdges || [] }); } catch (err) { log.debug('[blackboard_delta] applyDelta failed', err); }
       break;
     case SessionUpdateKind.BlackboardInitialized:
-      try { useBlackboardStore.setState({ enabled: !!update.enabled, error: update.enabled ? null : (update.reason || 'blackboard disabled') }); } catch (err) { if (import.meta.env.DEV) console.warn('[blackboard_initialized] setState failed', err); }
+      try { useBlackboardStore.setState({ enabled: !!update.enabled, error: update.enabled ? null : (update.reason || 'blackboard disabled') }); } catch (err) { log.debug('[blackboard_initialized] setState failed', err); }
       break;
     case SessionUpdateKind.SessionResyncFailed:
       // P4: SSE resync failure — set user-visible alert

@@ -200,7 +200,6 @@ import { UX_DESIGNER_SYSTEM_PROMPT_BY_LOCALE } from './prompts/ux_designer_syste
 import { PLANNER_SYSTEM_PROMPT_BY_LOCALE } from './prompts/planner_system.js';
 import { EVALUATOR_SYSTEM_PROMPT_BY_LOCALE } from './prompts/evaluator_system.js';
 import { ARCHITECT_SYSTEM_PROMPT_BY_LOCALE } from './prompts/architect_system.js';
-import { buildOfficeModeProtocol } from './office/OfficeModeProtocol.js';
 import { LLM } from '../config/defaults.js';
 import { getModelManager } from '../config/ModelManager.js';
 import { OrchestrationRuntime } from './OrchestrationRuntime.js';

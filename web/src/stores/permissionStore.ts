@@ -1,5 +1,8 @@
 import { create } from 'zustand';
 import { acpClient } from '../api/AcpClient';
+import { createLogger } from '../utils/logger';
+
+const log = createLogger('permissionStore');
 
 export interface PermissionRequest {
   requestId: string;
@@ -140,7 +143,7 @@ export const usePermissionStore = create<PermissionState>((set, get) => ({
         }));
       }
     } catch (e) {
-      console.error('[PermissionStore] approve RPC failed:', e);
+      log.error('approve RPC failed:', e);
       set((s) => ({ errors: { ...s.errors, [requestId]: getErrorMessage(e) } }));
     } finally {
       set((s) => ({ resolvingRequestIds: withoutKey(s.resolvingRequestIds, requestId) }));
@@ -165,7 +168,7 @@ export const usePermissionStore = create<PermissionState>((set, get) => ({
         }));
       }
     } catch (e) {
-      console.error('[PermissionStore] deny RPC failed:', e);
+      log.error('deny RPC failed:', e);
       set((s) => ({ errors: { ...s.errors, [requestId]: getErrorMessage(e) } }));
     } finally {
       set((s) => ({ resolvingRequestIds: withoutKey(s.resolvingRequestIds, requestId) }));
@@ -190,7 +193,7 @@ export const usePermissionStore = create<PermissionState>((set, get) => ({
         }));
       }
     } catch (e) {
-      console.error('[PermissionStore] allowAll RPC failed:', e);
+      log.error('allowAll RPC failed:', e);
       set((s) => ({ errors: { ...s.errors, [requestId]: getErrorMessage(e) } }));
     } finally {
       set((s) => ({ resolvingRequestIds: withoutKey(s.resolvingRequestIds, requestId) }));

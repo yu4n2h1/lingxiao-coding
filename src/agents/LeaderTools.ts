@@ -83,7 +83,7 @@ import { readPersistedEternalGoal } from '../core/EternalGoal.js';
 import { getPromptCatalog } from './prompts/i18n/catalog.js';
 import { normalizeCapabilityIntentProfile } from './IntentClassifier.js';
 import type { LeaderAutonomyToolGateResult } from './leader/LeaderToolGates.js';
-import { collectPrimitiveLeaves } from '../tools/Registry.js';
+import { collectPrimitiveLeaves } from '../tools/Registry.js';import { OFFICE_TOOL_NAMES, BUGHUNT_MODE_TOOL_NAMES } from '../contracts/constants/toolNames.js';
 
 /**
  * 把应进入 string[] 的值深度拍平为非空 string 数组。GLM 常把 string[] 误写成嵌套对象
@@ -579,6 +579,8 @@ export class LeaderToolsExecutor {
         return this.getReadyDagNodesTool(args);
       case 'verify_finding':
         return await this.verifyFindingTool(args);
+      case 'set_mode':
+        return this.setMode(args);
       default:
         throw new Error(`Unknown leader tool: ${name}`);
     }
@@ -1829,6 +1831,44 @@ export class LeaderToolsExecutor {
     }
     lines.push(`  已回写 compile_artifacts(+${compile.artifacts.length})${blackbox ? `、blackbox_artifacts(+${blackbox.artifacts.length})` : ''}；verified 门现认真实执行产物。`);
     return lines.join('\n');
+  }
+  /**
+   * set_mode — Leader 自主开关会话级模式（仅 office / bughunt，排除 workflow）。
+   *
+   * 复用既有激活链：写 session_state + emit('plugin:toggled')，
+   * 由 LeaderAgent 的 plugin:toggled 订阅回调调用 setOfficeMode/setBugHuntMode，
+   * 与 TUI /office、/bughunt 命令走同一条路径，保证状态/工具面/prompt 注入一致。
+   * workflow 是 beta 功能，只允许手动开启，故此处显式拒绝。
+   */
+  protected setMode(args: Record<string, unknown>): string {
+    const mode = typeof args.mode === 'string' ? args.mode.trim().toLowerCase() : '';
+    if (mode !== 'office' && mode !== 'bughunt') {
+      throw fail(`set_mode 仅支持 office / bughunt（workflow 为 beta，只能手动开启）；收到: ${mode || '(空)'}`);
+    }
+    const enabled = args.enabled === undefined ? true : args.enabled === true;
+    const sessionId = this.leader.sessionId;
+    const sessionKey = mode === 'office' ? SESSION_KEYS.OFFICE_MODE_ACTIVE : SESSION_KEYS.BUGHUNT_MODE_ACTIVE;
+    const current = this.leader.db.getSessionState(sessionId, sessionKey) === 'true';
+    if (current === enabled) {
+      return `${mode} 模式已经是${enabled ? '开启' : '关闭'}状态，无需变更。`;
+    }
+    const toolNames = mode === 'office' ? OFFICE_TOOL_NAMES : BUGHUNT_MODE_TOOL_NAMES;
+    this.leader.db.setSessionState(sessionId, sessionKey, String(enabled));
+    this.leader.emitter.emit('plugin:toggled', {
+      pluginId: mode,
+      enabled,
+      sessionId,
+      toolNames,
+      toolCount: toolNames.length,
+    });
+    if (mode === 'office') {
+      return enabled
+        ? 'Office 模式已开启 — 办公审美协议已注入，PPTX/DOCX/XLSX/PDF 改用 shell 跑 Node 脚本直调库（pptxgenjs/docx/exceljs/pdfkit）自由生成。再次调用 set_mode(mode="office", enabled=false) 关闭。'
+        : 'Office 模式已关闭 — 回到纯 Coding 模式，办公协议已从上下文卸载。';
+    }
+    return enabled
+      ? `BugHunt 模式已开启 — ${toolNames.length} 个调查/验证元工具已注入。再次调用 set_mode(mode="bughunt", enabled=false) 关闭。`
+      : 'BugHunt 模式已关闭 — 调查元工具已卸载。';
   }
 
   protected upsertBughuntFindingTool(args: Record<string, unknown>): string {

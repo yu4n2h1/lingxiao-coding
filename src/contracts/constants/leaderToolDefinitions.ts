@@ -1064,4 +1064,19 @@ description: '提交当前的完整执行方案。行为取决于控制模式（
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'set_mode',
+      description: '开启或关闭一个会话级能力模式（office / bughunt），无需用户手动敲 /office 或 /bughunt。开启 office：注入办公审美协议 + JS 生成路线（用 shell 跑 node 调 pptxgenjs/docx/exceljs/pdfkit 自由生成 PPTX/DOCX/XLSX/PDF），并解锁 office_ops/parse_file 验收工具；关闭则卸载这些上下文。开启 bughunt：注入缺陷调查 DAG 与 ledger 元工具。何时用：当用户的任务需要办公文档产出（做 PPT/Word/Excel/PDF 等）或系统性缺陷排查时，先用本工具开启对应模式，再开展工作。注意：workflow 是 beta 能力，只能由用户手动开启，本工具不支持。模式相互独立可叠加；重复设置同一状态是幂等的。',
+      parameters: {
+        type: 'object',
+        properties: {
+          mode: { type: 'string', enum: ['office', 'bughunt'], description: '要切换的模式。office=办公文档生成与审美交付；bughunt=系统性缺陷调查。不接受 workflow（beta，仅用户手动开启）。' },
+          enabled: { type: 'boolean', description: '目标状态：true=开启，false=关闭。' },
+        },
+        required: ['mode', 'enabled'],
+      },
+    },
+  },
 ];

@@ -54,7 +54,9 @@ interface CreateBrowserSessionOptions {
 const DEFAULT_VIEWPORT: BrowserViewport = {
   width: 1280,
   height: 820,
-  deviceScaleFactor: 1,
+  // 高分屏下用 2x 设备像素采样，screencast 位图按物理像素渲染，
+  // canvas 以 CSS 尺寸显示时由浏览器降采样，画面清晰不糊。
+  deviceScaleFactor: 2,
 };
 
 const MAX_SESSIONS = 3;
@@ -74,7 +76,7 @@ function normalizeUrl(raw: string): string {
 function toViewport(input?: Partial<BrowserViewport>): BrowserViewport {
   const width = Math.min(1920, Math.max(360, Math.round(input?.width ?? DEFAULT_VIEWPORT.width)));
   const height = Math.min(1400, Math.max(320, Math.round(input?.height ?? DEFAULT_VIEWPORT.height)));
-  const deviceScaleFactor = Math.min(2, Math.max(1, Number(input?.deviceScaleFactor ?? DEFAULT_VIEWPORT.deviceScaleFactor)));
+  const deviceScaleFactor = Math.min(3, Math.max(1, Number(input?.deviceScaleFactor ?? DEFAULT_VIEWPORT.deviceScaleFactor)));
   return { width, height, deviceScaleFactor };
 }
 
@@ -164,6 +166,24 @@ export class BrowserRuntime {
     session.url = session.page.url();
     session.title = await session.page.title().catch(() => '');
     return this.summary(session);
+  }
+
+  /**
+   * 调整 session 视口尺寸，使其匹配前端预览区的实际宽高比，
+   * 避免 object-fit: contain 产生大面积留边（画面显示太小）。
+   * 入参经 toViewport 夹紧到 [360..1920] x [320..1400]。
+   */
+  async resizeViewport(id: string, input: Partial<BrowserViewport>): Promise<BrowserViewport> {
+    const session = this.getSession(id);
+    session.lastUsedAt = Date.now();
+    const next = toViewport({ ...session.viewport, ...input });
+    // 尺寸无变化时跳过，避免无谓重排
+    if (next.width === session.viewport.width && next.height === session.viewport.height) {
+      return session.viewport;
+    }
+    await session.page.setViewportSize({ width: next.width, height: next.height });
+    session.viewport = next;
+    return next;
   }
 
   async screenshot(id: string): Promise<Buffer> {

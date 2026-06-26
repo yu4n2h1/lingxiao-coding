@@ -4,6 +4,7 @@ import { createEventProcessorState } from '@contracts/adapters/EventAdapter';
 import { acpClient } from '../api/AcpClient';
 import { getServerToken, tryRecoverToken } from '../api/headers';
 import { saveMessages, appendMessage, updateMessage, loadMessages } from '../utils/historyDB';
+import { createLogger } from '../utils/logger';
 import {
   extractText,
   isOpenToolCall,
@@ -80,6 +81,8 @@ import {
 
 // Re-export SSE utilities that are used by external components
 export { subscribeTaskUpdates, applyRuntimeSnapshotFromRpcResult } from './sseStore';
+
+const log = createLogger('sessionStore');
 
 // ─── Connection mutex ───
 let connectingSessionId: string | null = null;
@@ -190,8 +193,8 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   addMessage: (msg) => set((s) => {
     const saved = { ...msg, id: msg.id || String(nextMsgId()) };
     // 调试：记录消息添加来源
-    if (import.meta.env.DEV && msg.role === 'user') {
-      console.log('[addMessage] Adding user message:', {
+    if (msg.role === 'user') {
+      log.debug('[addMessage] Adding user message:', {
         id: saved.id,
         content: saved.content.substring(0, 50),
         timestamp: saved.timestamp,
@@ -488,14 +491,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         const recovered = await tryRecoverToken();
         if (!recovered) {
           const appWindow = lingxiaoWindow();
-          if (!appWindow.__lingxiao_401_warned) { appWindow.__lingxiao_401_warned = true; console.warn('[fetchSessions] 401 Unauthorized — token expired. Refresh page manually.'); }
+          if (!appWindow.__lingxiao_401_warned) { appWindow.__lingxiao_401_warned = true; log.warn('[fetchSessions] 401 Unauthorized — token expired. Refresh page manually.'); }
           return;
         }
         // 恢复成功，重新拉取 sessions + active
         const retrySessionsRes = await fetch('/api/sessions', { headers: { 'x-lingxiao-token': getServerToken() } });
         if (!retrySessionsRes.ok) {
           const appWindow = lingxiaoWindow();
-          if (!appWindow.__lingxiao_401_warned) { appWindow.__lingxiao_401_warned = true; console.warn('[fetchSessions] 401 after token recovery — token mismatch.'); }
+          if (!appWindow.__lingxiao_401_warned) { appWindow.__lingxiao_401_warned = true; log.warn('[fetchSessions] 401 after token recovery — token mismatch.'); }
           return;
         }
         const retryActiveRes = await fetch('/api/v1/sessions/active', { headers: { 'x-lingxiao-token': getServerToken() } });
@@ -517,7 +520,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         const sessions: SessionInfo[] = (Array.isArray(data) ? data : []).map((row) => normalizeSessionInfoRow(row as SessionListRow));
         set({ sessions, activeSessionId, sessionsLoaded: true });
       }
-    } catch (e) { console.warn('[fetchSessions] failed:', e); }
+    } catch (e) { log.warn('[fetchSessions] failed:', e); }
     set((s) => s.sessionsLoaded ? s : { ...s, sessionsLoaded: true });
   },
 
@@ -579,9 +582,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         const snapshot = coerceSessionRuntimeSnapshot(asRecord(focusResult).runtime);
         if (snapshot && connectingSessionId === sessionId) { set((s) => applyRuntimeSnapshotPatch(s, snapshot, pendingStreamIsEmpty())); }
       } catch (e) {
-        if (import.meta.env.DEV) console.warn('[connectToSession] session/focus RPC failed:', e);
+        log.warn('[connectToSession] session/focus RPC failed:', e);
       }
-      try { await syncRuntimeSnapshotFromAcp(sessionId); } catch (e) { if (import.meta.env.DEV) console.warn('[connectToSession] runtime_state RPC failed:', e); }
+      try { await syncRuntimeSnapshotFromAcp(sessionId); } catch (e) { log.warn('[connectToSession] runtime_state RPC failed:', e); }
       try {
         const detailRes = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, { headers: { 'x-lingxiao-token': getServerToken() }, signal: abortController.signal });
         if (connectingSessionId !== sessionId) return;
@@ -593,7 +596,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           const pendingPermission = detail?.pendingPermission;
           if (pendingPermission && typeof pendingPermission === 'object') { usePermissionStore.getState().addRequest(pendingPermission); }
         }
-      } catch (e) { console.warn('[connectToSession] 同步运行态失败:', e); }
+      } catch (e) { log.warn('[connectToSession] 同步运行态失败:', e); }
       try {
         const cached = await loadMessages(sessionId).catch(() => [] as Message[]);
         if (connectingSessionId !== sessionId) return;
@@ -612,12 +615,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             saveMessages(sessionId, useSessionStore.getState().messages).catch(() => {});
           }
         }
-      } catch (e: unknown) { if (e instanceof Error && e.name !== 'AbortError') { console.warn('[connectToSession] 加载消息历史失败:', (e as Error).message); } }
+      } catch (e: unknown) { if (e instanceof Error && e.name !== 'AbortError') { log.warn('[connectToSession] 加载消息历史失败:', (e as Error).message); } }
       try {
         const agentRes = await fetch(`/api/v1/sessions/${encodeURIComponent(sessionId)}/agents`, { headers: { 'x-lingxiao-token': getServerToken() }, signal: abortController.signal });
         if (connectingSessionId !== sessionId) return;
         if (!agentRes.ok) {
-          console.warn('[connectToSession] 加载 Agent 历史失败:', agentRes.status, await agentRes.text().catch(() => ''));
+          log.warn('[connectToSession] 加载 Agent 历史失败:', agentRes.status, await agentRes.text().catch(() => ''));
         } else {
           const agentData = await agentRes.json();
           if (connectingSessionId !== sessionId) return;
@@ -626,10 +629,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             if (Object.keys(agentConvs).length > 0) { set((s) => mergeAgentHistoryIntoState(s, agentConvs, { forceIncoming: true })); }
           }
         }
-      } catch (e: unknown) { if (e instanceof Error && e.name !== 'AbortError') { console.warn('[connectToSession] 加载 Agent 历史失败:', e.message); } }
+      } catch (e: unknown) { if (e instanceof Error && e.name !== 'AbortError') { log.warn('[connectToSession] 加载 Agent 历史失败:', e.message); } }
       set({ isLoadingHistory: false });
       get().fetchTokenUsage();
-    } catch (e) { console.error('Failed to connect to session:', e); set({ isConnected: false, isLoadingHistory: false }); }
+    } catch (e) { log.error('Failed to connect to session:', e); set({ isConnected: false, isLoadingHistory: false }); }
     finally { if (connectAbortController === abortController) connectAbortController = null; if (connectingSessionId === sessionId) connectingSessionId = null; }
   },
 
@@ -646,7 +649,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         if (newId) { await get().fetchSessions(); await get().connectToSession(newId); return newId; }
       }
       return undefined;
-    } catch (e) { console.error('Failed to create session:', e); throw e; }
+    } catch (e) { log.error('Failed to create session:', e); throw e; }
   },
 
   deleteSession: async (sessionId: string) => {
@@ -665,7 +668,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         }
         set((s) => ({ sessions: s.sessions.filter((sess) => sess.id !== sessionId) }));
       }
-    } catch (e) { console.error('Failed to delete session:', e); }
+    } catch (e) { log.error('Failed to delete session:', e); }
   },
 
   markQuestionAnswered: (messageId: string, answeredValue: string) => set((s) => ({

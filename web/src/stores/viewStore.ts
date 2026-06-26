@@ -1,5 +1,8 @@
 import { create } from 'zustand';
 import { flushSync } from 'react-dom';
+import { createLogger } from '../utils/logger';
+
+const log = createLogger('viewStore');
 
 export type ViewName =
   | 'chat' | 'tasks' | 'plugins' | 'terminal' | 'canvas' | 'artifact'
@@ -21,7 +24,7 @@ function loadPanelState(): PersistedPanelState {
     const stored = localStorage.getItem(PANEL_STATE_KEY);
     if (stored) return JSON.parse(stored);
   } catch (err) {
-    console.warn('[viewStore] Failed to load panel state:', err);
+    log.warn('Failed to load panel state:', err);
   }
   return { sidebarCollapsed: false };
 }
@@ -30,7 +33,7 @@ function savePanelState(state: PersistedPanelState) {
   try {
     localStorage.setItem(PANEL_STATE_KEY, JSON.stringify(state));
   } catch (err) {
-    console.warn('[viewStore] Failed to save panel state:', err);
+    log.warn('Failed to save panel state:', err);
   }
 }
 

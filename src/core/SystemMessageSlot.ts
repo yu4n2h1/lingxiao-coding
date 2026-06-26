@@ -14,6 +14,7 @@
 
 import { contentToPlainText, type ChatMessage } from '../llm/types.js';
 import { isManifestSlotContent } from './ContextManifest.js';
+import { coreLogger } from './Log.js';
 
 export type SystemSlotMatcher =
   | { kind: 'manifestSlot'; slot: string }
@@ -92,11 +93,11 @@ export function collapseSystemSlots(
       .filter((msg, index) => !filtered.includes(msg))
       .reduce((sum, msg) => sum + contentToPlainText(msg.content).length, 0);
 
-    console.log(`[SystemSlotCollapse] before=${messages.length} after=${filtered.length} removed=${totalRemoved} removedChars=${removedChars}`);
+    coreLogger.debug(`[SystemSlotCollapse] before=${messages.length} after=${filtered.length} removed=${totalRemoved} removedChars=${removedChars}`);
 
     for (const [slot, stats] of slotStats) {
       if (stats.removed > 0) {
-        console.log(`  slot="${slot}" total=${stats.total} kept=${stats.kept} removed=${stats.removed}`);
+        coreLogger.debug(`  slot="${slot}" total=${stats.total} kept=${stats.kept} removed=${stats.removed}`);
       }
     }
   }

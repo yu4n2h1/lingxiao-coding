@@ -12,6 +12,7 @@ import { useSessionStore } from './stores/sessionStore';
 import { loadLastSelectedSessionId, pickBootstrapSessionId } from './utils/sessionListViewModel';
 import InkBackground from './components/decor/InkBackground';
 import OnboardingWizard from './components/onboarding/OnboardingWizard';
+import { useResourceHousekeeping } from './hooks/useResourceHousekeeping';
 
 /**
  * Session bootstrap — runs at app level so SSE connection is established
@@ -116,6 +117,8 @@ function useOnboardingCheck() {
 export default function App() {
   useSessionBootstrap();
   useConfigLanguageSync();
+  // 性能优化 (T-3 P2)：idle 周期回收旧 activity events，App 顶层挂载一次。
+  useResourceHousekeeping();
   const { needsOnboarding, setNeedsOnboarding } = useOnboardingCheck();
 
   const handleOnboardingComplete = () => {

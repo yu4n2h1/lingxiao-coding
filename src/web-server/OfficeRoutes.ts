@@ -15,6 +15,15 @@ import { GenerateXlsxTool } from '../tools/implementations/GenerateXlsxTool.js';
 import type { ToolContext } from '../tools/Tool.js';
 import { tempDownloadRegistry } from '../core/TempDownloadRegistry.js';
 import { coreLogger } from '../core/Log.js';
+import { extractPptxPreviewModel, extractDocxPreviewModel } from '../tools/implementations/office/OfficePreviewExtractor.js';
+import { existsSync } from 'fs';
+import { extname } from 'path';
+
+interface OfficePreviewBody {
+  path: string;
+  format?: 'pptx' | 'docx';
+  slideLimit?: number;
+}
 
 interface OfficeRoutesDeps {
   requireServerToken: AuthFn;
@@ -190,5 +199,57 @@ export function registerOfficeRoutes(fastify: FastifyInstance, deps: OfficeRoute
         },
       ],
     };
+  });
+  /**
+   * POST /api/v1/office/preview
+   * 解析 PPTX/DOCX 文件，返回结构化预览模型（OfficePreviewModel）。
+   */
+  fastify.post('/api/v1/office/preview', async (request, reply) => {
+    if (!requireServerToken(request, reply)) return;
+
+    const body = request.body as OfficePreviewBody | undefined;
+    if (!body?.path || typeof body.path !== 'string') {
+      reply.status(400).send({ error: 'path is required (string)' });
+      return;
+    }
+
+    const filePath = body.path;
+
+    // 文件不存在 → 404
+    if (!existsSync(filePath)) {
+      reply.status(404).send({ error: `File not found: ${filePath}` });
+      return;
+    }
+
+    // 确定格式：优先 format 参数，其次文件扩展名
+    const ext = extname(filePath).toLowerCase().replace(/^\./, '');
+    const format = body.format || (ext === 'pptx' || ext === 'docx' ? ext : undefined);
+
+    if (!format || (format !== 'pptx' && format !== 'docx')) {
+      reply.status(400).send({ error: 'Unsupported format for preview. Use pptx or docx (via format param or file extension).' });
+      return;
+    }
+
+    try {
+      let model;
+      if (format === 'pptx') {
+        const options: { slideLimit?: number } = {};
+        if (body.slideLimit !== undefined) {
+          if (typeof body.slideLimit !== 'number' || body.slideLimit <= 0) {
+            reply.status(400).send({ error: 'slideLimit must be a positive number' });
+            return;
+          }
+          options.slideLimit = body.slideLimit;
+        }
+        model = await extractPptxPreviewModel(filePath, options);
+      } else {
+        model = await extractDocxPreviewModel(filePath);
+      }
+
+      return { data: model };
+    } catch (error) {
+      coreLogger.error(`[OfficeRoutes] Preview extraction failed for ${filePath}: ${error}`);
+      sendError(reply, 500, error);
+    }
   });
 }

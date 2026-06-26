@@ -10,6 +10,7 @@ import { auditModeEvent } from '../core/ModeAudit.js';
 import { isOfficeToolName } from './officeToolContract.js';
 import { config as runtimeConfig } from '../config.js';
 import { getToolFailureLoopGuard } from '../agents/runtime/ToolFailureLoopGuard.js';
+import { coreLogger } from '../core/Log.js';
 import {
   evaluateToolPermission,
   getToolPermissionContextFromToolContext,
@@ -1494,7 +1495,7 @@ export class ToolRegistry {
             await context.assumptionFeedback?.(batch);
           }
         } catch (error) {
-          console.warn(`[ToolRegistry] assumption verification skipped after ${name}: ${error instanceof Error ? error.message : String(error)}`);
+          coreLogger.warn(`[ToolRegistry] assumption verification skipped after ${name}: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
     }

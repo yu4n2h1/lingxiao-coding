@@ -3098,7 +3098,7 @@ input[type="number"]::placeholder {
 }
 
 .workbench-panel.is-browser {
-  min-width: min(780px, calc(100vw - 420px));
+  min-width: min(480px, calc(100vw - 360px));
 }
 
 .workbench-collapsed-rail {
@@ -4303,6 +4303,7 @@ input[type="number"]::placeholder {
 }
 
 .browser-preview-column {
+  position: relative;
   display: flex;
   min-height: 0;
   flex: 1;
@@ -4374,7 +4375,7 @@ input[type="number"]::placeholder {
 
 @media (max-width: 1399px) {
   .workbench-panel.is-browser {
-    min-width: min(680px, calc(100vw - 360px));
+    min-width: min(420px, calc(100vw - 320px));
   }
 
   .workbench-panel.is-browser .browser-workspace.has-selection {

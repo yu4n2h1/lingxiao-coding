@@ -141,6 +141,7 @@ const SLASH_COMMANDS: SlashCommandDefinition[] = [
       .map(s => ({ name: s, desc: `Wiki ${s}` })) },
   { name: '/dream', desc: '整理 checkpoint 到结构化 MEMORY.md', handledBy: 'callback', category: 'session' },
   { name: '/distill', desc: '从会话历史提炼可复用资产（技能/命令/Agent）', usage: '/distill [回溯天数]', handledBy: 'callback', category: 'tools' },
+  { name: '/bug', desc: '生成可提交的诊断包（含 issue 预填正文，已脱敏）', handledBy: 'callback', category: 'misc' },
 ];
 
 const EN_COMMAND_DESCRIPTIONS: Record<string, string> = {
@@ -148,6 +149,7 @@ const EN_COMMAND_DESCRIPTIONS: Record<string, string> = {
   '/resume': 'Resume a session',
   '/session': 'Show the current session space',
   '/doctor': 'Show runtime diagnostics',
+  '/bug': 'Generate a submittable diagnostics bundle (with prefilled, redacted issue body)',
   '/permissions': 'Show permission layers',
   '/bughunt': 'Start the whitebox audit, instrumentation, and blackbox verification loop',
   '/bughunt-status': 'Show the current Bughunt situation summary',

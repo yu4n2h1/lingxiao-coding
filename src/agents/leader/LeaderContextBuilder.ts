@@ -30,7 +30,7 @@ import {
 } from '../../core/ContractPack.js';
 import { parseBlueprint, renderBlueprintOverview, isBlueprintActive, computeBlueprintCoverage, getReadySubsystems, type SubsystemContractStatus } from '../../core/ProjectBlueprint.js';
 import { computeScopeOrthogonality } from '../../core/ContractAllowedScope.js';
-import { buildOfficeModeProtocol } from '../office/OfficeModeProtocol.js';
+import { resolveActiveModes, MODE_REGISTRY, ALL_MODE_IDS } from '../../contracts/modes.js';
 import { resolveModeRuntimeProjection, resolveEffectiveRoutePreference } from '../../core/ModeRuntimeProjection.js';
 import { getTeamMemberRegistry } from '../../core/TeamMailbox.js';
 import { getPromptLocale } from '../prompts/i18n/catalog.js';
@@ -365,7 +365,6 @@ export class LeaderContextBuilder {
   getDynamicContext(): string | null {
     const db = this.deps.getDb();
     const sessionId = this.deps.sessionId;
-    const officeMode = db.getSessionState(sessionId, SESSION_KEYS.OFFICE_MODE_ACTIVE) === 'true';
     const contractPack = this.deps.getLeaderBlackboard()?.getContractPack() ?? null;
     const contractSystemMessage = renderContractPackSystemMessage(contractPack);
     const contractManifest = renderContractPackManifestSection(contractPack);
@@ -394,9 +393,18 @@ export class LeaderContextBuilder {
         priority: FragmentPriority.ContractManifest,
       });
     }
-    if (officeMode) {
+    // 全模式隔离：遍历激活模式，对声明了 promptBuilder.leader 的模式注入其 prompt。
+    // 替换原 office 单点 if——任何模式（office/bughunt/...）只要声明 leader 注入器，
+    // 激活时即注入；关闭时其 prompt 文本完全不进 Leader 上下文。
+    const activeModes = resolveActiveModes(db, sessionId);
+    for (const modeId of ALL_MODE_IDS) {
+      if (!activeModes[modeId]) continue;
+      const leaderBuilder = MODE_REGISTRY[modeId].promptBuilder?.leader;
+      if (!leaderBuilder) continue;
+      const content = leaderBuilder();
+      if (!content) continue;
       sections.push({
-        section: { title: 'Office Mode Protocol', content: buildOfficeModeProtocol() },
+        section: { title: `${modeId} Mode Protocol`, content },
         priority: FragmentPriority.OfficeMode,
       });
     }

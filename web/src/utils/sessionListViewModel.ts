@@ -5,6 +5,9 @@ import {
   runtimeImpliesBusy,
 } from '../stores/sessionStoreHelpers.ts';
 import type { SessionInfo, SessionRuntimeSnapshot } from '../stores/sessionStoreTypes.ts';
+import { createLogger } from './logger';
+
+const log = createLogger('sessionListViewModel');
 
 const LAST_SELECTED_SESSION_KEY = 'lingxiao-last-selected-session-id';
 
@@ -27,7 +30,7 @@ export function loadLastSelectedSessionId(): string | null {
     const stored = localStorage.getItem(LAST_SELECTED_SESSION_KEY);
     return stored && stored.trim() ? stored : null;
   } catch (err) {
-    console.warn('[sessionListViewModel] Failed to load last selected session:', err);
+    log.warn('Failed to load last selected session:', err);
     return null;
   }
 }
@@ -41,7 +44,7 @@ export function saveLastSelectedSessionId(sessionId: string | null): void {
       localStorage.removeItem(LAST_SELECTED_SESSION_KEY);
     }
   } catch (err) {
-    console.warn('[sessionListViewModel] Failed to save last selected session:', err);
+    log.warn('Failed to save last selected session:', err);
   }
 }
 

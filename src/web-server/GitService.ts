@@ -17,6 +17,7 @@ import { CONFIG_DIR, getConfigValue } from '../config.js';
 import { simpleGit, type SimpleGit, type DefaultLogFields, type DiffResultBinaryFile, type DiffResultNameStatusFile, type DiffResultTextFile } from 'simple-git';
 import { buildSafeGitEnv } from './GitEnv.js';
 import { IS_WINDOWS } from '../utils/platform.js';
+import { serverLogger } from '../core/Log.js';
 
 const EMPTY_TREE_HASH = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 
@@ -347,7 +348,7 @@ export class GitService {
     await previous.catch((err) => {
       // 前序 git 操作失败不应阻断链上后续操作，但也不能彻底无声 ——
       // 连续静默失败（如仓库损坏）会让文件状态悄悄错下去。debug 记录便于定位。
-      console.debug('[GitService] 前序 git 操作失败，继续执行后续链操作:', err instanceof Error ? err.message : String(err));
+      serverLogger.debug('[GitService] prev git op failed, continuing chain', { error: err instanceof Error ? err.message : String(err) });
       return undefined;
     });
     try {
@@ -509,13 +510,13 @@ export class GitService {
         await repo.raw(['gc', '--prune=now', '--aggressive']);
       }
 
-      console.debug(
+      serverLogger.debug(
         `[GitService] Auto-cleanup: ${realCommits.length} checkpoints → kept ${maxCheckpoints}, ` +
         `gc=${autoGc ? 'executed' : 'skipped'}`,
       );
     } catch (err) {
       // 清理失败不应影响快照本身
-      console.debug(
+      serverLogger.debug(
         `[GitService] Auto-cleanup failed (non-critical): ${err instanceof Error ? err.message : String(err)}`,
       );
     }

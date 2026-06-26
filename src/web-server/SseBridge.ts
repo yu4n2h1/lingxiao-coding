@@ -9,6 +9,7 @@ import {
 } from '../contracts/adapters/EventAdapter.js';
 import { WORKFLOW_REALTIME_EVENT_NAMES } from '../contracts/types/Workflow.js';
 import type { WorkflowRealtimeEventName } from '../contracts/types/Workflow.js';
+import { serverLogger } from '../core/Log.js';
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -498,7 +499,7 @@ export class SseBridge {
         for (const client of clients) {
           // 检查是否过期
           if (now - client.lastActivity > STALE_THRESHOLD_MS) {
-            console.log(`[SseBridge] 清理过期连接: ${client.connectionId} (session=${sessionId})`);
+            serverLogger.debug('[SseBridge] stale connection cleaned', { connectionId: client.connectionId, sessionId });
             this.connectionManager.removeClient(client.connectionId);
             continue;
           }
@@ -725,7 +726,7 @@ export class SseBridge {
 
   private warnMissingAgentSession(agentId: string | undefined): void {
     if (process.env.NODE_ENV !== 'production') {
-      console.warn(`[SseBridge] 事件缺失 sessionId（agentId=${agentId ?? 'unknown'}），上游 emitter 应补字段`);
+      serverLogger.warn('[SseBridge] event missing sessionId, upstream emitter should supply it', { agentId: agentId ?? 'unknown' });
     }
   }
 

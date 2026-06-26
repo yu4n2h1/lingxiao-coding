@@ -1,4 +1,7 @@
 import { getServerToken, tryRecoverToken } from './headers';
+import { createLogger } from '../utils/logger';
+
+const log = createLogger('AcpClient');
 
 export interface AcpConnection {
   connectionId: string;
@@ -53,6 +56,7 @@ export class AcpClient {
   private handshakeInProgress = false;
   private handshakeReconnectCount = 0;
   private visibilityHandler: (() => void) | null = null;
+  private onlineHandler: (() => void) | null = null;
   /**
    * emitConnectionState 去重 (2026-05-28)：
    * processChunk 每次 SSE 帧解析成功后都会调一次 emitConnectionState('connected')。
@@ -135,7 +139,11 @@ export class AcpClient {
 
     this.handshakeReconnectCount++;
 
-    // Stop after too many reconnect cycles — avoid infinite loop
+    // 超过握手上限后不再彻底放弃（旧逻辑会 return 永久断开，导致
+    // 笔记本休眠 / 长时间挂后台 / 网络长断后回到前台时，isConnected 永久 false，
+    // ChatView 退回"选择/创建会话"空状态页，且 App bootstrap 因 sessionId 残留不自救，
+    // 只能手动刷新 —— 体验极差）。改为：通知一次 disconnected 供 UI 反馈，
+    // 然后以最大退避间隔持续低频重试；网络恢复后 online/visibilitychange 会即时拉起。
     if (this.handshakeReconnectCount > AcpClient.MAX_RECONNECT_HANDSHAKES) {
       this.sseActive = false;
       this.emitConnectionState('disconnected', { reason: 'max_reconnect_cycles_exceeded' });
@@ -144,6 +152,14 @@ export class AcpClient {
           handler({ attempts: this.handshakeReconnectCount, reason: 'max_reconnect_cycles_exceeded' });
         }
       }
+      // 不 return：以最大间隔继续重试，保证网络恢复后能自动接回。
+      if (!this.manuallyDisconnected && !this.reconnectTimer) {
+        this.reconnectTimer = setTimeout(() => {
+          this.reconnectTimer = null;
+          void this.reconnectHandshake();
+        }, AcpClient.RECONNECT_MAX_DELAY_MS);
+      }
+      this.handshakeInProgress = false;
       return;
     }
 
@@ -172,7 +188,7 @@ export class AcpClient {
       // connect() succeeded and called startSse() (fire-and-forget).
       // If SSE fails again, reconnectHandshake() will be called again with backoff.
     } catch (err) {
-      console.warn('[AcpClient] ACP reconnect handshake failed:', err instanceof Error ? err.message : String(err));
+      log.warn('ACP reconnect handshake failed:', err instanceof Error ? err.message : String(err));
       this.sseActive = false;
       this.emitConnectionState('disconnected', { reason: 'handshake_failed' });
       // Schedule next attempt after backoff
@@ -271,7 +287,7 @@ export class AcpClient {
                 try {
                   const parsed = JSON.parse(eventDataLines.join('\n').trim());
                   const method = parsed.method;
-                  if (import.meta.env.DEV) console.debug('[ACP SSE]', method, parsed);
+                  log.debug('[ACP SSE]', method, parsed);
                   if (method && this.listeners.has(method)) {
                     for (const handler of this.listeners.get(method)!) {
                       handler(parsed);
@@ -290,9 +306,9 @@ export class AcpClient {
                   this.emitConnectionState('connected');
                 } catch (err) {
                   this.consecutiveParseErrors++;
-                  console.debug('[AcpClient] SSE parse error:', err, `(${this.consecutiveParseErrors}/${AcpClient.MAX_PARSE_ERRORS})`);
+                  log.debug('SSE parse error:', err, `(${this.consecutiveParseErrors}/${AcpClient.MAX_PARSE_ERRORS})`);
                   if (this.consecutiveParseErrors >= AcpClient.MAX_PARSE_ERRORS) {
-                    console.warn('[AcpClient] Too many consecutive parse errors, triggering reconnect');
+                    log.warn('Too many consecutive parse errors, triggering reconnect');
                     this.consecutiveParseErrors = 0;
                     this.abortCurrentSse();
                     this.scheduleReconnect();
@@ -309,14 +325,14 @@ export class AcpClient {
 
         processChunk().catch((err) => {
           if (this.manuallyDisconnected || controller.signal.aborted || this.connection?.connectionId !== connectionId) return;
-          console.warn('[AcpClient] SSE stream error:', err instanceof Error ? err.message : String(err));
+          log.warn('SSE stream error:', err instanceof Error ? err.message : String(err));
           this.sseActive = false;
           this.scheduleReconnect();
         });
       })
       .catch((err) => {
         if (this.manuallyDisconnected || controller.signal.aborted || this.connection?.connectionId !== connectionId) return;
-        console.warn('[AcpClient] SSE connection error:', err instanceof Error ? err.message : String(err));
+        log.warn('SSE connection error:', err instanceof Error ? err.message : String(err));
         this.sseActive = false;
         this.scheduleReconnect();
       });
@@ -411,7 +427,7 @@ export class AcpClient {
           },
         });
       } catch (err) {
-        console.warn('[AcpClient] ACP disconnect request failed:', err instanceof Error ? err.message : String(err));
+        log.warn('ACP disconnect request failed:', err instanceof Error ? err.message : String(err));
       }
     }
     this.connection = null;
@@ -493,7 +509,7 @@ export class AcpClient {
     this.clearHeartbeat();
     this.heartbeatTimer = setTimeout(() => {
       if (!this.sseActive || this.manuallyDisconnected) return;
-      console.warn('[AcpClient] No SSE event received in 60s, triggering reconnect');
+      log.warn('No SSE event received in 60s, triggering reconnect');
       this.abortCurrentSse();
       this.scheduleReconnect();
     }, AcpClient.HEARTBEAT_TIMEOUT_MS);
@@ -535,7 +551,7 @@ export class AcpClient {
         const isStale = this.sseActive && this.lastSseEventAt > 0 && (now - this.lastSseEventAt) > 45_000;
         if (!this.sseActive || isStale) {
           if (isStale) {
-            console.warn(`[AcpClient] SSE stale detected on visibilitychange: last event ${Math.round((now - this.lastSseEventAt) / 1000)}s ago, forcing reconnect`);
+            log.warn(`SSE stale detected on visibilitychange: last event ${Math.round((now - this.lastSseEventAt) / 1000)}s ago, forcing reconnect`);
             this.abortCurrentSse();
           }
           // 确定性 stale 重连：重置计数器 + 立即连接，不走指数退避
@@ -545,12 +561,30 @@ export class AcpClient {
       }
     };
     document.addEventListener('visibilitychange', this.visibilityHandler);
+
+    // 网络恢复（断网 / 休眠唤醒 / 切换 Wi-Fi）时立即自救重连，
+    // 不等指数退避计时器，避免长时间停在 disconnected → ChatView 退回空状态页。
+    this.onlineHandler = () => {
+      if (!this.connection || this.manuallyDisconnected) return;
+      if (this.isConnected) return;
+      log.warn('Network online event — forcing immediate reconnect');
+      this.abortCurrentSse();
+      this.handshakeReconnectCount = 0;
+      this.reconnectAttempts = 0;
+      this.clearReconnectTimer();
+      this.reconnectHandshake({ immediate: true });
+    };
+    window.addEventListener('online', this.onlineHandler);
   }
 
   private detachVisibilityListener() {
     if (this.visibilityHandler) {
       document.removeEventListener('visibilitychange', this.visibilityHandler);
       this.visibilityHandler = null;
+    }
+    if (this.onlineHandler) {
+      window.removeEventListener('online', this.onlineHandler);
+      this.onlineHandler = null;
     }
   }
 

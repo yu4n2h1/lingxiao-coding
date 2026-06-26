@@ -3,6 +3,7 @@ import type { RegisteredTool } from './Registry.js';
 import { config as runtimeConfig, getConfigValue, type UserToolSpec } from '../config.js';
 import { buildUserTool } from './UserToolFactory.js';
 import { LazyToolProxy, objectSchema } from './LazyToolProxy.js';
+import { coreLogger } from '../core/Log.js';
 
 // Core tools — always loaded immediately
 import { FileReadTool } from './implementations/FileRead.js';
@@ -40,8 +41,6 @@ import { TeamMessageTool } from './implementations/TeamMessageTool.js';
 import { NodeReplTool } from './implementations/NodeReplTool.js';
 import { BlackboardTool } from './implementations/BlackboardTool.js';
 import { DesignAssetTool } from './implementations/DesignAssetTool.js';
-import { GenerateHtmlPresentationTool } from './implementations/GenerateHtmlPresentationTool.js';
-import { GenerateHtmlDocumentTool } from './implementations/GenerateHtmlDocumentTool.js';
 
 interface ToolsConfigDto {
   user_defined?: UserToolSpec[];
@@ -192,79 +191,11 @@ const NON_CORE_TOOLS: ReadonlyArray<{ name: string; factory: ToolFactory }> = Ob
   { name: 'team_inbox', factory: () => new TeamInboxTool() },
   { name: 'blackboard', factory: () => new BlackboardTool() },
   { name: 'design_asset', factory: () => new DesignAssetTool() },
-  { name: 'generate_xlsx', factory: () => lazyTool({
-    name: 'generate_xlsx',
-    description: '生成 Excel XLSX 工作簿。支持多工作表、自定义列宽、公式和基础样式。',
-    modulePath: './implementations/GenerateXlsxTool.js',
-    schema: objectSchema({ title: stringProp('工作簿标题'), sheets: arrayProp({}, '工作表数组'), path: stringProp('输出 xlsx 路径') }, ['title', 'sheets']),
-  }) },
-  { name: 'edit_xlsx', factory: () => lazyTool({
-    name: 'edit_xlsx',
-    description: '编辑现有 XLSX 文件，支持读取、写单元格、追加行、管理工作表、公式等。',
-    modulePath: './implementations/EditXlsxTool.js',
-    schema: objectSchema({ path: stringProp('要编辑的 XLSX 文件路径'), output_path: stringProp('另存为路径'), operations: arrayProp({}, '操作列表') }, ['path', 'operations']),
-  }) },
-  { name: 'generate_docx', factory: () => lazyTool({
-    name: 'generate_docx',
-    description: '生成原生可编辑 DOCX 文档。支持标题、段落、项目符号、表格和分页。',
-    modulePath: './implementations/GenerateDocxTool.js',
-    schema: objectSchema({ title: stringProp('文档标题'), blocks: arrayProp({}, '文档块'), path: stringProp('输出 docx 路径') }, ['title', 'blocks']),
-  }) },
-  { name: 'edit_docx', factory: () => lazyTool({
-    name: 'edit_docx',
-    description: '编辑现有 DOCX 文件，支持替换文本、追加段落/标题/表格和 element_id 操作。',
-    modulePath: './implementations/EditDocxTool.js',
-    schema: objectSchema({ path: stringProp('source DOCX path'), output_path: stringProp('output DOCX path'), operations: arrayProp({}, '操作列表') }, ['path', 'operations']),
-  }) },
-  { name: 'inspect_docx', factory: () => lazyTool({
-    name: 'inspect_docx',
-    description: 'Inspect a native DOCX and return stable element IDs for edit_docx operations.',
-    modulePath: './implementations/InspectDocxTool.js',
-    schema: objectSchema({ path: stringProp('DOCX file path'), include_empty: booleanProp('include empty elements') }, ['path']),
-  }) },
-  { name: 'generate_pptx', factory: () => lazyTool({
-    name: 'generate_pptx',
-    description: '生成原生可编辑 PPTX 演示文稿，支持标题页、内容页、双栏页、图片、图表和备注。',
-    modulePath: './implementations/GeneratePptxTool.js',
-    schema: objectSchema({ title: stringProp('演示文稿标题'), slides: arrayProp({}, '幻灯片数组'), path: stringProp('输出 pptx 路径') }, ['title', 'slides']),
-  }) },
-  { name: 'edit_pptx', factory: () => lazyTool({
-    name: 'edit_pptx',
-    description: '编辑现有 PPTX 文件，支持添加/替换文本、形状、图片和 element_id 操作。',
-    modulePath: './implementations/EditPptxTool.js',
-    schema: objectSchema({ path: stringProp('source PPTX path'), output_path: stringProp('output PPTX path'), operations: arrayProp({}, '操作列表') }, ['path', 'operations']),
-  }) },
-  { name: 'inspect_pptx', factory: () => lazyTool({
-    name: 'inspect_pptx',
-    description: 'Inspect a native PPTX and return stable element IDs, slide numbers, coordinates and text metadata.',
-    modulePath: './implementations/InspectPptxTool.js',
-    schema: objectSchema({ path: stringProp('PPTX file path'), slide: numberProp('1-based slide index'), include_empty: booleanProp('include empty elements') }, ['path']),
-  }) },
   { name: 'office_ops', factory: () => lazyTool({
     name: 'office_ops',
     description: 'Office 辅助操作入口：缩略图、PDF 渲染、资产检索和渲染 QA 等。',
     modulePath: './implementations/OfficeOpsTool.js',
     schema: objectSchema({ action: stringProp('操作类型') }, ['action']),
-  }) },
-  { name: 'generate_canvas', factory: () => lazyTool({
-    name: 'generate_canvas',
-    description: '生成视觉艺术作品、海报、设计或插图，支持 PNG/PDF 输出。',
-    modulePath: './implementations/GenerateCanvasTool.js',
-    schema: objectSchema({ width: numberProp('画布宽度'), height: numberProp('画布高度'), format: enumProp(['png', 'pdf'], '输出格式'), path: stringProp('输出路径') }),
-  }) },
-  { name: 'generate_html_presentation', factory: () => new GenerateHtmlPresentationTool() },
-  { name: 'generate_html_document', factory: () => new GenerateHtmlDocumentTool() },
-  { name: 'generate_slidev', factory: () => lazyTool({
-    name: 'generate_slidev',
-    description: '生成 Slidev Markdown 演示项目，支持内置运行时预览和 PDF/PPTX/PNG 导出。',
-    modulePath: './implementations/GenerateSlidevTool.js',
-    schema: objectSchema({ markdown: stringProp('完整 Slidev slides.md 内容'), output_dir: stringProp('输出目录'), title: stringProp('演示标题') }, ['markdown']),
-  }) },
-  { name: 'generate_pdf', factory: () => lazyTool({
-    name: 'generate_pdf',
-    description: '生成 PDF 文档。支持文本、标题、列表、表格、图片等内容。',
-    modulePath: './implementations/GeneratePdfTool.js',
-    schema: objectSchema({ output_path: stringProp('输出 PDF 文件路径'), title: stringProp('文档标题'), content: { type: 'object', additionalProperties: true } }, ['output_path', 'content']),
   }) },
   { name: 'bughunt_full_scan', factory: () => lazyTool({
     name: 'bughunt_full_scan',
@@ -430,7 +361,7 @@ export function applyUserToolsConfig(registry: ToolRegistry): ToolRegistryApplyR
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       skippedUserTools.push(name);
-      console.warn(`[tools] user_defined tool "${name}" 注册失败，已跳过: ${reason}`);
+      coreLogger.warn(`[tools] user_defined tool "${name}" 注册失败，已跳过: ${reason}`);
     }
   }
 

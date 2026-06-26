@@ -493,6 +493,35 @@ function formatAgentElapsedShort(ms: number): string {
   return `${m}m${s.toString().padStart(2, '0')}s`;
 }
 
+/**
+ * 性能优化 (T-3 P1-b)：把 agent 工具卡的"耗时秒数"显示抽成独立 memo 叶子组件。
+ * 此前 AgentMessageView 整体每秒 setTick 重渲染，唯一目的只是刷新这一个耗时数字。
+ * 迁入后 1000ms tick 只重渲染这个 span，整条 agent 消息不再每秒重渲染。
+ * 终态（isRunning=false）后不再 tick，定格在最终耗时（用 endedAt 计算）。
+ */
+const AgentElapsedTimer = memo(function AgentElapsedTimer({
+  from,
+  endedAt,
+  isRunning,
+  className,
+}: {
+  from: number | undefined;
+  endedAt: number | undefined;
+  isRunning: boolean;
+  className?: string;
+}) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!isRunning) return;
+    const id = window.setInterval(() => setTick((n) => n + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [isRunning]);
+  const to = isRunning ? Date.now() : endedAt;
+  const elapsedMs = from && to ? Math.max(0, to - from) : null;
+  if (elapsedMs === null) return null;
+  return <span className={className}>{formatAgentElapsedShort(elapsedMs)}</span>;
+});
+
 function parseAgentMaybeJsonObject(value: unknown): Record<string, unknown> | null {
   if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
   if (typeof value !== 'string') return null;
@@ -737,16 +766,11 @@ function groupAgentMessages(messages: AgentMessage[]): GroupedAgentItem[] {
 function AgentMessageView({ msg, result }: { msg: AgentMessage; result?: AgentMessage }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
-  // tool_call running 期间每秒重渲染计时
-  const [, setTick] = useState(0);
+  // 性能优化 (T-3 P1-b)：tool_call running 期间的"耗时秒数"已抽到 AgentElapsedTimer
+  // 叶子组件自行 tick，本组件不再整体每秒重渲染。
   const isToolCall = msg.type === 'tool_call';
   const isToolRunning = isToolCall && isAgentToolOpenStatus(msg.toolStatus, msg.isStreaming);
   const outputRef = useRef<HTMLPreElement>(null);
-  useEffect(() => {
-    if (!isToolRunning) return;
-    const id = window.setInterval(() => setTick((n) => n + 1), 1000);
-    return () => window.clearInterval(id);
-  }, [isToolRunning]);
   // 流式输出自动滚动到底（对齐 leader MessageBubble.tsx:630）
   useEffect(() => {
     if (outputRef.current) {
@@ -810,7 +834,18 @@ function AgentMessageView({ msg, result }: { msg: AgentMessage; result?: AgentMe
             </span>
           )}
           {isToolRunning && <span className="codex-live-dot" />}
-          {event.meta && <span className="agent-status-chip font-mono tabular-nums">{event.meta}</span>}
+          {/* 性能优化 (T-3 P1-b)：running 时耗时由 AgentElapsedTimer 自行每秒 tick，
+              整条 agent 消息不再每秒重渲染；终态定格用 describeAgentToolEvent 的 meta。 */}
+          {isToolRunning ? (
+            <AgentElapsedTimer
+              from={isStreamingInput ? msg.firstDeltaAt : msg.startedAt}
+              endedAt={msg.endedAt}
+              isRunning={true}
+              className="agent-status-chip font-mono tabular-nums"
+            />
+          ) : (
+            event.meta && <span className="agent-status-chip font-mono tabular-nums">{event.meta}</span>
+          )}
           <button onClick={() => setExpanded(!expanded)} className="text-text-tertiary hover:text-text-secondary transition-colors ml-auto" aria-expanded={expanded}>
             {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
           </button>

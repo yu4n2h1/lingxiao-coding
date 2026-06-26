@@ -45,6 +45,7 @@ import {
   type ContextManifestMcpSurface,
   type ContextManifestModeSurface,
   type ContextManifestPluginSurface,
+  type ContextManifestSection,
   type ContextManifestToolSurface,
 } from '../core/ContextManifest.js';
 import { buildLlmInputManifest, summarizeLlmInputManifest } from '../core/LlmInputManifest.js';
@@ -148,6 +149,7 @@ import { config as runtimeConfig, getConfigValue } from '../config.js';
 import { normalizeImageRetainRounds } from '../llm/image_blob_store.js';
 import { SESSION_KEYS } from '../core/SessionStateKeys.js';
 import { OFFICE_SUITE_SKILL_NAME } from './office/OfficeModeProtocol.js';
+import { resolveActiveModes, MODE_REGISTRY, ALL_MODE_IDS } from '../contracts/modes.js';
 import { MemoryManager } from '../memory/MemoryManager.js';
 import { TimeoutError } from './errors/TimeoutError.js';
 import { getPromptTemplate, type TaskType, type PromptMode } from './prompts/PromptTemplates.js';
@@ -1235,6 +1237,22 @@ export class BaseAgent {
       ],
     };
 
+    // 全模式隔离：遍历激活模式，对声明了 promptBuilder.worker 的模式注入协议文本。
+    // office 激活时 worker 不仅拿到 skill，还要拿到协议文本（JS 路线 + 审美门槛 + 验收）。
+    // 模式关闭时其 prompt 文本完全不进 worker 上下文。
+    const modeProtocolSections: ContextManifestSection[] = [];
+    if (this.db) {
+      const activeModeMap = resolveActiveModes(this.db, this.sessionId);
+      for (const modeId of ALL_MODE_IDS) {
+        if (!activeModeMap[modeId]) continue;
+        const workerBuilder = MODE_REGISTRY[modeId].promptBuilder?.worker;
+        if (!workerBuilder) continue;
+        const content = workerBuilder();
+        if (!content) continue;
+        modeProtocolSections.push({ title: `${modeId} Mode Protocol`, content });
+      }
+    }
+
     return buildWorkerTaskPrompt({
       task: {
         id: task.id,
@@ -1254,6 +1272,7 @@ export class BaseAgent {
       pluginSurface,
       mcpSurface,
       modes,
+      manifestSections: modeProtocolSections.length > 0 ? modeProtocolSections : undefined,
       agentArtifacts: this.buildAgentArtifactManifest(),
       blackboardEnabled: this.toolNames.some(t => t === 'blackboard'),
     });

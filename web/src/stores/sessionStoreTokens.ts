@@ -1,7 +1,10 @@
 // ─── Token statistics & compression methods for sessionStore ───
 
 import { getServerToken } from '../api/headers';
+import { createLogger } from '../utils/logger';
 import type { SessionState, TokenUsage } from './sessionStoreTypes.ts';
+
+const log = createLogger('sessionStoreTokens');
 
 type TokenUsageRow = Partial<TokenUsage>;
 
@@ -45,7 +48,7 @@ export function createTokenActions(
           }
         }
       } catch (e) {
-        console.warn('[fetchTokenUsage] failed:', e);
+        log.warn('fetchTokenUsage failed:', e);
       }
     },
 
@@ -66,7 +69,7 @@ export function createTokenActions(
         return { error: String(data?.error || `HTTP ${res.status}`) };
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
-        console.warn('[compressContext] failed:', e);
+        log.warn('compressContext failed:', e);
         return { error: message };
       }
     },

@@ -366,7 +366,7 @@ export class WorkerProcessRunner extends EventEmitter {
       const text = data.toString();
       this.appendRecentOutput(handle.recentStderr, text);
       if (this.options.debug) {
-        console.error(`[Worker ${workerId} stderr] ${text.trim()}`);
+        coreLogger.debug(`[Worker ${workerId} stderr] ${text.trim()}`);
       }
       this.emit('worker:stderr', { workerId, data: text });
     });
@@ -786,7 +786,7 @@ export class WorkerProcessRunner extends EventEmitter {
 
       return true;
     } catch (error) {
-      console.error(`[WorkerProcessRunner] Failed to kill worker ${workerId}:`, error);
+      coreLogger.error(`[WorkerProcessRunner] Failed to kill worker ${workerId}:`, error);
       return false;
     }
   }
@@ -810,7 +810,7 @@ export class WorkerProcessRunner extends EventEmitter {
       handle.process.send(message as unknown as Serializable);
       return true;
     } catch (error) {
-      console.error(`[WorkerProcessRunner] Failed to send message to worker ${workerId}:`, error);
+      coreLogger.error(`[WorkerProcessRunner] Failed to send message to worker ${workerId}:`, error);
       return false;
     }
   }
