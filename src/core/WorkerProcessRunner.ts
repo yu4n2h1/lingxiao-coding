@@ -33,6 +33,7 @@ import {
 import { registerProtectedPid, unregisterProtectedPid } from './ProcessSelfProtection.js';
 import { PidRegistry, isOrphanedEntry } from './PidRegistry.js';
 import { IPCDrainQueue } from './ipc/IPCDrainQueue.js';
+import { RESOURCE_BUDGET } from '../config/defaults.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -169,6 +170,7 @@ export interface WorkerHandle {
   error?: Error;
   lastHeartbeat: number;
   result?: string;
+  lastRss?: number;
   recentStdout: string[];
   recentStderr: string[];
   timeoutReason?: 'spawn_timeout' | 'heartbeat_timeout' | 'max_runtime' | 'zombie_detected';
@@ -510,7 +512,7 @@ export class WorkerProcessRunner extends EventEmitter {
         break;
 
       case 'heartbeat':
-        this.emit('worker:heartbeat', workerId, msg.payload);
+        this.recordWorkerRss(handle, msg.payload); this.emit('worker:heartbeat', workerId, msg.payload);
         break;
 
       case 'bus_message':
@@ -656,6 +658,20 @@ export class WorkerProcessRunner extends EventEmitter {
   /**
    * 启动心跳监控
    */
+  /**
+   * 记录 Worker 自报的 RSS（来自 heartbeat payload.rss）。
+   * Worker 进程内 process.memoryUsage().rss 最准确，零跨平台成本。
+   * 心跳监控循环据此做内存温控：超 WORKER_MAX_RSS_MB 则按 max_runtime 同口径 kill + 可恢复重派。
+   */
+  private recordWorkerRss(handle: WorkerHandle, payload: unknown): void {
+    if (payload && typeof payload === 'object' && 'rss' in payload) {
+      const rss = (payload as { rss?: unknown }).rss;
+      if (typeof rss === 'number' && Number.isFinite(rss) && rss >= 0) {
+        handle.lastRss = rss;
+      }
+    }
+  }
+
   private startHeartbeatMonitor(): void {
     this.heartbeatInterval = setInterval(() => {
       const now = Date.now();
@@ -705,6 +721,16 @@ export class WorkerProcessRunner extends EventEmitter {
           coreLogger.warn(`Worker ${workerId} max runtime exceeded`);
           this.markWorkerTimeout(workerId, 'max_runtime', `max runtime exceeded after ${runtime}ms`);
           this.killWorker(workerId, 'max runtime exceeded');
+        }
+
+        // 内存温控：worker 自报 RSS 超上限 → 按 max_runtime 同口径 kill + 可恢复重派，
+        // 防止失控/泄漏的子进程吃光宿主内存拖死主进程。0 表示禁用。
+        const rssLimitBytes = RESOURCE_BUDGET.WORKER_MAX_RSS_MB * 1024 * 1024;
+        if (rssLimitBytes > 0 && handle.lastRss !== undefined && handle.lastRss > rssLimitBytes) {
+          const rssMb = Math.round(handle.lastRss / 1024 / 1024);
+          coreLogger.warn(`Worker ${workerId} RSS ${rssMb}MB exceeds limit ${RESOURCE_BUDGET.WORKER_MAX_RSS_MB}MB — killing (memory throttle)`);
+          this.markWorkerTimeout(workerId, 'max_runtime', `rss ${rssMb}MB exceeds ${RESOURCE_BUDGET.WORKER_MAX_RSS_MB}MB`);
+          this.killWorker(workerId, `rss limit exceeded (${rssMb}MB)`);
         }
       }
     }, this.options.heartbeatMonitorIntervalMs);

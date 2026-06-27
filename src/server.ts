@@ -25,7 +25,7 @@ import { registerSessionRoutes } from './web-server/SessionRoutes.js';
 import { registerSettingsRoutes } from './web-server/SettingsRoutes.js';
 import { registerFileSystemRoutes } from './web-server/FileSystemRoutes.js';
 import { registerArtifactPreviewRoutes } from './web-server/ArtifactPreviewRoutes.js';
-import { registerTempDownloadRoutes } from './web-server/TempDownloadRoutes.js';
+import { registerCanvasRoutes } from './web-server/CanvasRoutes.js';import { registerTempDownloadRoutes } from './web-server/TempDownloadRoutes.js';
 import { registerWikiRoutes } from './web-server/WikiRoutes.js';
 import { registerContractRoutes } from './web-server/ContractRoutes.js';
 import { registerDaemonRoutes } from './web-server/DaemonRoutes.js';
@@ -497,6 +497,35 @@ export async function createServerWithDeps(
   registerWikiRoutes(fastify, { wikiApi, emitter: eventEmitter, requireServerToken });
   registerFileSystemRoutes(fastify, { repos, requireServerToken, getActiveSessionId });
   registerArtifactPreviewRoutes(fastify, { repos, requireServerToken, getActiveSessionId });
+  registerCanvasRoutes(fastify, {
+    repos,
+    requireServerToken,
+    getActiveSessionId,
+    submitIntentToLeader: async (sessionId, intent) => {
+      const anchorDesc = intent.anchor.kind === 'spec'
+        ? `spec 节点 \`${intent.anchor.specPath}\``
+        : `源文件 \`${intent.anchor.srcFile}\` 第 ${intent.anchor.srcRange[0]}-${intent.anchor.srcRange[1]} 行`;
+      const promptText = [
+        '【剑阁 Canvas 选区修改请求】',
+        `产物：${intent.artifactId}`,
+        `选中单元：${intent.nodeId}（${anchorDesc}）`,
+        intent.currentContent ? `当前内容：${intent.currentContent}` : '',
+        `用户诉求：${intent.userIntent}`,
+        '',
+        '请定位上述锚点对应的源码，按用户诉求精准修改，重新生成产物，并将新产物作为新版本入栈（CanvasStore.pushVersion）。',
+      ].filter(Boolean).join('\n');
+      try {
+        if (!sessionManager.getSession(sessionId)) {
+          const resumed = await sessionManager.resumeSession(sessionId);
+          if (!resumed) return false;
+        }
+        await sessionManager.sendUserInput(sessionId, promptText, { interrupt: false, source: 'web' });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  });
   registerLangfuseRoutes(fastify, { requireServerToken });
   registerTempDownloadRoutes(fastify);
   registerScheduledTaskRoutes(fastify, { scheduledTaskManager, requireServerToken });

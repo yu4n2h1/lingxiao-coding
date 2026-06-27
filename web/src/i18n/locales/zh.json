@@ -42,6 +42,8 @@
   "artifact.pptx.structureFallback": "未能提取到幻灯片结构，已切换为文本预览。",
   "artifact.pptx.untitledSlide": "第 {{index}} 页",
   "artifact.pptx.rendering": "正在渲染幻灯片...",
+  "artifact.office.rendering": "正在渲染真实版式...",
+  "artifact.office.realLayout": "真实版式渲染（LibreOffice）",
   "artifact.preview.parseError": "预览解析失败，下面内容不可作为可靠验收依据。",
   "artifact.preview.partial": "这是降级预览，部分结构、样式或媒体信息可能缺失。",
   "artifact.preview.warning.officeBinary": "旧版 Office 二进制文件只能作为只读附件预览。",

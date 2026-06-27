@@ -497,6 +497,9 @@ export const RESOURCE_BUDGET = {
   SQLITE_WAL_CHECKPOINT_MB: 50,
   /** scratchpad 最大磁盘 (MB) */
   SCRATCHPAD_MAX_MB: 50,
+  /** 单个 Worker 子进程 RSS 内存上限 (MB)：超过则按温控 kill 并走可恢复重派。
+   *  0 表示禁用内存温控。默认 2GB——正常 worker 远低于此，触顶通常意味着失控/泄漏。 */
+  WORKER_MAX_RSS_MB: 2048,
 } as const;
 
 // ═══════════════════════════════════════════════════════════════

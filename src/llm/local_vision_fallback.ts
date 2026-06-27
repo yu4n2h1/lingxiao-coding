@@ -26,6 +26,11 @@ import {
   popSuppressedError,
 } from '../core/RuntimeGuards.js';
 import { llmLogger } from '../core/Log.js';
+import {
+  LOCAL_TESSDATA_DIR,
+  isTessdataAvailable as resolverTessdataAvailable,
+  localWorkerOptions,
+} from './tesseractResolver.js';
 
 // ==================== 常量 ====================
 
@@ -34,11 +39,7 @@ const OCR_TIMEOUT_MS = 30_000;
 /** Worker 创建超时（ms） */
 const WORKER_INIT_TIMEOUT_MS = 10_000;
 
-/** 本地 tessdata 目录：优先项目根目录 tessdata/，其次相对 dist/ 的 ../../tessdata/ */
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const LOCAL_TESSDATA_DIR = fs.existsSync(path.resolve(__dirname, '../../tessdata'))
-  ? path.resolve(__dirname, '../../tessdata')
-  : path.resolve(__dirname, '../../../tessdata');
+/** 本地 tessdata 目录与 worker 资源解析收敛到共享 resolver（多级查找 + corePath 本地化）。 */
 
 // ==================== OCR 缓存 ====================
 
@@ -149,9 +150,7 @@ let tesseractAvailable: boolean | null = null;
  */
 function isTessdataAvailable(): boolean {
   if (tesseractAvailable !== null) return tesseractAvailable;
-  const hasDir = fs.existsSync(LOCAL_TESSDATA_DIR);
-  const hasEng = fs.existsSync(path.join(LOCAL_TESSDATA_DIR, 'eng.traineddata.gz'));
-  tesseractAvailable = hasDir && hasEng;
+  tesseractAvailable = resolverTessdataAvailable();
   return tesseractAvailable;
 }
 
@@ -187,7 +186,7 @@ export async function ocrImage(url: string, index: number): Promise<string | nul
     try {
       const worker = await withTimeout(
         createWorker('eng+chi_sim', 1, {
-          langPath: LOCAL_TESSDATA_DIR,
+          ...localWorkerOptions(),
           gzip: true,
           cacheMethod: 'none',
           logger: () => {}, // 静默

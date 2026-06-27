@@ -11,7 +11,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { CONFIG_DIR, getConfigValue } from '../config.js';
 import { simpleGit, type SimpleGit, type DefaultLogFields, type DiffResultBinaryFile, type DiffResultNameStatusFile, type DiffResultTextFile } from 'simple-git';
@@ -506,8 +506,22 @@ export class GitService {
       await repo.raw(['reflog', 'expire', '--expire-unreachable=now', '--all']);
       
       if (autoGc) {
-        // --prune=now 立即清理不可达对象，--aggressive 做更彻底的压缩
-        await repo.raw(['gc', '--prune=now', '--aggressive']);
+        // 先清理遗留的 tmp_pack_*（崩溃/超时残留），避免一次次累积成几十 GB。
+        this.cleanupStaleTmpPacks();
+        // 用温和的增量 gc：--prune=now 清理不可达对象。
+        // 绝不用 --aggressive —— 它会把全部 objects 解压重组并写出与仓库等大的
+        // 临时 pack（tmp_pack_*），大工作区下单个临时文件可达 10GB+，崩溃即残留，
+        // 是 checkpoints 目录撑爆磁盘的直接元凶。同时封顶 repack 内存/线程，
+        // 防止单次 gc 把内存吃满拖垮主进程。
+        await repo.raw([
+          '-c', 'gc.auto=0',
+          '-c', 'pack.windowMemory=64m',
+          '-c', 'pack.packSizeLimit=128m',
+          '-c', 'pack.threads=1',
+          'gc', '--prune=now', '--no-detach',
+        ]);
+        // gc 完再扫一遍，清掉本次 gc 可能新产生又未被 git 收尾的 tmp_pack。
+        this.cleanupStaleTmpPacks();
       }
 
       serverLogger.debug(
@@ -519,6 +533,31 @@ export class GitService {
       serverLogger.debug(
         `[GitService] Auto-cleanup failed (non-critical): ${err instanceof Error ? err.message : String(err)}`,
       );
+    }
+  }
+
+  /**
+   * 清理 shadow git objects/pack 下遗留的 tmp_pack_* 临时文件。
+   *
+   * git gc/repack 写新 pack 时先落地为 tmp_pack_*，正常收尾会 rename 成正式 pack。
+   * 但进程被 kill / 超时 / OOM 时这些临时文件会残留，且每个可与仓库等大（大工作区
+   * 10GB+），一次次累积就把磁盘吃光（用户实测十几个 10.75GB 的 tmp_pack）。
+   * 这里在每次 gc 前后主动删除它们 —— 它们是死文件，删除绝对安全。
+   */
+  private cleanupStaleTmpPacks(): void {
+    try {
+      const packDir = path.join(this.historyDir, '.git', 'objects', 'pack');
+      if (!existsSync(packDir)) return;
+      for (const name of readdirSync(packDir)) {
+        if (!name.startsWith('tmp_pack')) continue;
+        try {
+          rmSync(path.join(packDir, name), { force: true });
+        } catch {
+          // best-effort：单个删除失败不阻塞
+        }
+      }
+    } catch {
+      // 整体 best-effort：清理失败绝不影响快照/gc 主流程
     }
   }
 

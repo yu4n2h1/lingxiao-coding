@@ -247,14 +247,57 @@ export interface ToolDefinitionModePolicyOptions {
   allowSoloEphemeralDispatch?: boolean;
 }
 
+// zod issue 的宽松视图：避免依赖 zod 内部类型导出，同时能访问 invalid_union
+// 的 errors（每个候选 variant 一组子 issue）和 unrecognized_keys 的 keys。
+type LooseZodIssue = {
+  code?: string;
+  path?: (string | number)[];
+  message?: string;
+  keys?: string[];
+  errors?: LooseZodIssue[][];
+};
+
+// 把单条 issue 格式化为可自我纠正的人类可读描述。
+// 关键改进：z.union（如 structured_patch 的 hunk）失败时，zod 顶层只给一句无信息量的
+// "Invalid input"。这里展开候选 variant，挑差异最小的那个，明确指出多/缺哪些字段，
+// 让调用方（含 LLM）能据此自我纠正，而不是反复瞎试。
+function formatZodIssue(issue: LooseZodIssue, depth = 0): string {
+  const path = issue.path && issue.path.length > 0 ? issue.path.join('.') : '(root)';
+  if (issue.code === 'invalid_union' && Array.isArray(issue.errors) && issue.errors.length > 0 && depth < 3) {
+    // 子 issue 最少的 variant = 最接近匹配的形态
+    const best = issue.errors
+      .map((variantIssues) => ({ issues: variantIssues, score: variantIssues.length }))
+      .sort((a, b) => a.score - b.score)[0];
+    if (best && best.issues.length > 0) {
+      const detail = best.issues.slice(0, 4).map((sub) => formatZodIssue(sub, depth + 1)).join('; ');
+      return `${path}: 不匹配任一允许形态，最接近的形态还差 → ${detail}`;
+    }
+  }
+  if (issue.code === 'unrecognized_keys' && Array.isArray(issue.keys) && issue.keys.length > 0) {
+    return `${path}: 含该形态不允许的字段 ${issue.keys.map((k) => `"${k}"`).join(', ')}（同一项不要混用多种形态的字段）`;
+  }
+  return `${path}: ${issue.message ?? 'invalid'}`;
+}
+
 function formatZodError(error: z.ZodError): string {
-  return error.issues
+  return (error.issues as unknown as LooseZodIssue[])
+    .slice(0, 8)
+    .map((issue) => formatZodIssue(issue))
+    .join('; ');
+}
+
+// 与 formatZodError 同源的结构化 hints：union 失败时也展开为可读描述，
+// 避免 hints 里仍是塌缩的 "Invalid input"。
+function zodErrorHints(error: z.ZodError): Array<{ path: string; message: string }> {
+  return (error.issues as unknown as LooseZodIssue[])
     .slice(0, 8)
     .map((issue) => {
-      const path = issue.path.length > 0 ? issue.path.join('.') : '(root)';
-      return `${path}: ${issue.message}`;
-    })
-    .join('; ');
+      const path = issue.path && issue.path.length > 0 ? issue.path.join('.') : '(root)';
+      const formatted = formatZodIssue(issue);
+      // formatZodIssue 返回 "path: detail"，hints 只取 detail 部分
+      const sep = formatted.indexOf(': ');
+      return { path, message: sep >= 0 ? formatted.slice(sep + 2) : formatted };
+    });
 }
 
 function levenshtein(a: string, b: string): number {
@@ -1100,7 +1143,7 @@ export class ToolRegistry {
             retryable: true,
             cause: formatted,
             fix: registryText.argumentValidationFix,
-            hints: parsed.error.issues.slice(0, 8).map((issue) => ({ path: issue.path.join('.') || '(root)', message: issue.message })),
+            hints: zodErrorHints(parsed.error),
             example_args: exampleArgsFromSchema(schema, normalizedArgs),
             retry_args: retryArgsFromSchema(schema, normalizedArgs),
           }),

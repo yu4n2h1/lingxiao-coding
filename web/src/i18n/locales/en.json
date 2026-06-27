@@ -42,6 +42,8 @@
   "artifact.pptx.structureFallback": "No slide structure could be extracted. Showing text preview instead.",
   "artifact.pptx.untitledSlide": "Slide {{index}}",
   "artifact.pptx.rendering": "Rendering slides...",
+  "artifact.office.rendering": "Rendering real layout...",
+  "artifact.office.realLayout": "Real layout render (LibreOffice)",
   "artifact.preview.parseError": "Preview parsing failed. Do not treat the content below as reliable acceptance evidence.",
   "artifact.preview.partial": "This is a degraded preview; some structure, styling, or media information may be missing.",
   "artifact.preview.warning.officeBinary": "Legacy Office binary files are only available as read-only attachments.",

@@ -27,7 +27,7 @@ import { PermissionModeToggle } from './PermissionModeToggle';
 import ChatGitBranchPicker from './ChatGitBranchPicker';
 import WorkspacePicker from './WorkspacePicker';
 import WorkbenchChangeStrip from './WorkbenchChangeStrip';
-import WorkbenchSidePanel, { type WorkbenchToolRequest } from './WorkbenchSidePanel';
+import JiangeCanvas from './JiangeCanvas';
 import WorkbenchTerminalDock from './WorkbenchTerminalDock';
 import RunStatusStrip from './RunStatusStrip';
 import { useWorkbenchContext } from './useWorkbenchContext';
@@ -721,7 +721,6 @@ export default function ChatView() {
     }
     return true;
   });
-  const [workbenchToolRequest, setWorkbenchToolRequest] = useState<WorkbenchToolRequest | null>(null);
   const [showAgentPanel, setShowAgentPanel] = useState(false);
   const [agentPanelExpanded, setAgentPanelExpanded] = useState(false);
   const lastAutoOpenedAgentRunRef = useRef('');
@@ -1680,21 +1679,22 @@ export default function ChatView() {
   }, []);
 
   const openRunReview = useCallback(() => {
+    // 剑阁已重构为 Canvas 工作台，审查入口仅展开剑阁（不再切 tab）。
     setWorkbenchPanelCollapsed(false);
-    setWorkbenchToolRequest((current) => ({
-      tool: 'review',
-      id: (current?.id ?? 0) + 1,
-    }));
   }, []);
 
   useEffect(() => {
     const handleOpenAgentPanel = () => setShowAgentPanel(true);
     const handleOpenWorkbenchReview = () => openRunReview();
+    // 下载产物「在画布打开」：展开剑阁侧栏（产物由 openArtifact 驱动 JiangeCanvas 内的 ArtifactView 预览）。
+    const handleOpenJiange = () => setWorkbenchPanelCollapsed(false);
     window.addEventListener('lingxiao:open-agent-panel', handleOpenAgentPanel);
     window.addEventListener('lingxiao:open-workbench-review', handleOpenWorkbenchReview);
+    window.addEventListener('lingxiao:open-jiange', handleOpenJiange);
     return () => {
       window.removeEventListener('lingxiao:open-agent-panel', handleOpenAgentPanel);
       window.removeEventListener('lingxiao:open-workbench-review', handleOpenWorkbenchReview);
+      window.removeEventListener('lingxiao:open-jiange', handleOpenJiange);
     };
   }, [openRunReview]);
 
@@ -2192,13 +2192,6 @@ export default function ChatView() {
     setCmdSelectedIndex(0);
   }, [input, showCmdDropdown, SLASH_COMMANDS, slashCommandRegistryStatus]);
 
-  const insertBrowserPrompt = useCallback((prompt: string) => {
-    setInput((prev) => prev.trim() ? `${prev.trimEnd()}\n\n${prompt}` : prompt);
-    setPromptSuggestions([]);
-    requestAnimationFrame(resizeInput);
-    setTimeout(() => textareaRef.current?.focus(), 30);
-  }, [resizeInput]);
-
   const insertWorkbenchGuidePrompt = useCallback((prompt: string) => {
     setInput((prev) => prev.trim() ? `${prev.trimEnd()}\n\n${prompt}` : prompt);
     setPromptSuggestions([]);
@@ -2226,18 +2219,6 @@ export default function ChatView() {
       throw err;
     }
   }, [addToast, t]);
-
-  const sendBrowserPrompt = useCallback(async (prompt: string) => {
-    if (!isConnected) {
-      insertBrowserPrompt(prompt);
-      return;
-    }
-    setPromptSuggestions([]);
-    setShowCmdDropdown(false);
-    setShowSkillDropdown(false);
-    setShowAgentDropdown(false);
-    await doSend(prompt, [], []);
-  }, [doSend, insertBrowserPrompt, isConnected]);
 
   const insertSkill = useCallback((skillName: string) => {
     setInput(prev => {
@@ -3499,17 +3480,10 @@ export default function ChatView() {
           </button>
         </div>
       ) : (
-        <WorkbenchSidePanel
-          context={workbench.context}
-          isLoading={workbench.isLoading}
-          error={workbench.error}
-          terminalOpen={workbenchTerminalOpen}
-          toolRequest={workbenchToolRequest}
+        <JiangeCanvas
+          workspaceName={workbenchWorkspaceName}
           onRefresh={workbench.refresh}
           onCollapse={() => setWorkbenchPanelCollapsed(true)}
-          onToggleTerminal={() => setWorkbenchTerminalOpen((open) => !open)}
-          onInsertBrowserPrompt={insertBrowserPrompt}
-          onSendBrowserPrompt={sendBrowserPrompt}
         />
       )}
 

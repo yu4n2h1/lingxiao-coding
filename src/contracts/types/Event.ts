@@ -141,7 +141,8 @@ export type EventType =
   | 'user:question_answered'
   | 'langfuse:trace'
   | 'session:resync_failed'
-  | 'git:activity';
+  | 'git:activity'
+  | 'canvas:version_pushed';
 
 export type EventPayloadBase = object & {
   sessionId?: string;
@@ -655,6 +656,7 @@ export const EVENT_TYPES: readonly EventType[] = [
   'user:input_needed',
   'user:question_answered',
   'langfuse:trace',
+  'canvas:version_pushed',
 ] as const;
 
 const EVENT_TYPE_SET: ReadonlySet<string> = new Set(EVENT_TYPES);

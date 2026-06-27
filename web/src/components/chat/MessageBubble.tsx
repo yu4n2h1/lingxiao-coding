@@ -368,6 +368,8 @@ function DownloadArtifactCard({ artifact }: { artifact: DownloadArtifact }) {
   ].filter(Boolean).join(' · ');
 
   const handlePreview = () => {
+    // 在剑阁 Canvas 工作台中索引/预览：openArtifact 驱动 JiangeCanvas 内的 ArtifactView，
+    // 切到 chat 视图并派发事件展开剑阁侧栏（而非跳独立全屏 artifact 视图）。
     openArtifact({
       name: artifact.name,
       path: artifact.path,
@@ -376,7 +378,8 @@ function DownloadArtifactCard({ artifact }: { artifact: DownloadArtifact }) {
       mimeType: artifact.mimeType,
       expiresAt: artifact.expiresAt,
     });
-    setMainView('artifact');
+    setMainView('chat');
+    window.dispatchEvent(new CustomEvent('lingxiao:open-jiange'));
   };
 
   const handleDownload = async () => {
@@ -425,9 +428,8 @@ function DownloadArtifactCard({ artifact }: { artifact: DownloadArtifact }) {
       <button
         type="button"
         onClick={handlePreview}
-        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border-muted text-text-tertiary hover:text-accent-blue hover:bg-bg-hover disabled:opacity-40"
-        disabled={!artifact.path}
-        title={artifact.path ? t('artifact.action.previewInCanvas') : t('artifact.error.noPath')}
+        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border-muted text-text-tertiary hover:text-accent-blue hover:bg-bg-hover"
+        title={t('artifact.action.previewInCanvas')}
       >
         <Eye size={14} />
       </button>

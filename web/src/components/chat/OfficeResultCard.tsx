@@ -154,13 +154,11 @@ export default function OfficeResultCard({ toolName, result }: Props) {
 
   const handleOpenInCanvas = useCallback(() => {
     if (!data?.path) return;
-    // 通过 artifact store 触发剑阁 office tab
+    // 打开产物即驱动剑阁 Canvas 舞台（ArtifactView 监听 activeArtifact 自动预览）；
+    // 切到 chat 视图并派发事件展开剑阁侧栏，确保产物在画布中可见。
     openArtifact({ name: data.name || 'document', path: data.path, mimeType: data.mimeType });
-    // 派发事件让 WorkbenchSidePanel 切换到 office tab
-    window.dispatchEvent(new CustomEvent('lingxiao:open-office-canvas', {
-      detail: { path: data.path, format }
-    }));
-  }, [data, openArtifact, format]);
+    window.dispatchEvent(new CustomEvent('lingxiao:open-jiange'));
+  }, [data, openArtifact]);
 
   if (!data) return null;
 

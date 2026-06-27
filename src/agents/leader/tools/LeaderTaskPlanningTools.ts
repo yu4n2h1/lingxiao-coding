@@ -60,6 +60,43 @@ function normalizeOptionalString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+/**
+ * 解析任务 ID 依赖列表，容忍 LLM/schema-coerce 产生的多种畸形输入：
+ *   - 正常数组 ["T-1","T-2"]
+ *   - 字符串化 JSON 数组 "[\"T-1\"]"：schema array-coerce 会把它当 primitive 包成
+ *     ["[\"T-1\"]"]，或直接作为字符串传入 —— 两种都解嵌套展开为叶子 ID
+ *   - 单个标量 "T-1"
+ * 单一事实源，供 create_task / update_task 共用，避免两处解析逻辑漂移。
+ */
+function normalizeTaskIdList(value: unknown): string[] {
+  const out: string[] = [];
+  const visit = (item: unknown): void => {
+    if (item === null || item === undefined) return;
+    if (Array.isArray(item)) {
+      for (const el of item) visit(el);
+      return;
+    }
+    if (typeof item !== 'string') return;
+    const trimmed = item.trim();
+    if (!trimmed) return;
+    // 元素本身是 JSON 数组字符串（如 "[\"T-17\"]"）→ 解析并逐元素展开。
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+      try {
+        const parsed: unknown = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) {
+          for (const el of parsed) visit(el);
+          return;
+        }
+      } catch {
+        // 非合法 JSON：落到下方按普通字符串处理（task id 本身不含方括号）
+      }
+    }
+    out.push(trimmed);
+  };
+  visit(value);
+  return Array.from(new Set(out));
+}
+
 function parseBooleanFlag(value: unknown): boolean {
   if (typeof value === 'boolean') return value;
   if (typeof value === 'string') {
@@ -555,12 +592,7 @@ export async function createTask(
     }
     agentType = resolved;
   }
-  const blockedBy = Array.isArray(args.blocked_by)
-    ? (args.blocked_by as unknown[])
-      .filter((value): value is string => typeof value === 'string')
-      .map(value => value.trim())
-      .filter(Boolean)
-    : [];
+  const blockedBy = normalizeTaskIdList(args.blocked_by);
   const scope: TaskScopeConfig = {
     working_directory: typeof args.working_directory === 'string' ? args.working_directory : undefined,
     write_scope: Array.isArray(args.write_scope)
@@ -770,11 +802,8 @@ export async function updateTask(
     }
     updates.agent_type = nextAgentType;
   }
-  if (Array.isArray(args.blocked_by)) {
-    updates.blocked_by = (args.blocked_by as unknown[])
-      .filter((value): value is string => typeof value === 'string')
-      .map(value => value.trim())
-      .filter(Boolean);
+  if (args.blocked_by !== undefined) {
+    updates.blocked_by = normalizeTaskIdList(args.blocked_by);
   }
   if (typeof args.working_directory === 'string') updates.working_directory = args.working_directory;
   if (Array.isArray(args.write_scope)) {

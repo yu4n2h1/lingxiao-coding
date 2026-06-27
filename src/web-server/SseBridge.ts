@@ -73,6 +73,8 @@ const SESSION_FORWARD_EVENTS = [
   'plan:submitted',
   'plan:updated',
   'plan:finalized',
+  // Canvas 版本栈实时更新
+  'canvas:version_pushed',
   // Orchestration（非 run_state）
   'orchestration:node_update',
   'orchestration:event_applied',

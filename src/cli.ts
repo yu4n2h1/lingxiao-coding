@@ -36,6 +36,7 @@ import { toErrorMessage } from './core/errors.js';
 import { playInitIntro, renderInitNotice } from './cli_init_banner.js';
 import { runUpgrade } from './cli_upgrade.js';
 import { runOnboarding } from './tui/OnboardingTui.js';
+import { cleanupLingxiaoDisk, formatBytes } from './commands/cleanupDisk.js';
 
 const emitter = createEventEmitter();
 const messageBus = createMessageBus(1000, emitter);
@@ -1289,6 +1290,36 @@ ${t('cli.about_license_body')}
 
 ${chalk.dim(t('cli.about_footer'))}
 `);
+  });
+
+// ─── 磁盘清理子命令 ───────────────────────────────────────────────────────────
+program
+  .command('clean')
+  .description('清理 ~/.lingxiao 下的多余磁盘占用（checkpoint 残留 tmp_pack / shadow git 仓库）')
+  .option('--apply', '真正删除（默认 dry-run 只扫描报告）')
+  .option('--all', '连同整个 checkpoint 仓库一起删除（放弃 /rewind 历史，回收最多空间）；默认只删 tmp_pack 死文件')
+  .option('--json', '以 JSON 输出报告')
+  .action((opts) => {
+    const scope = opts.all ? 'all' : 'tmp';
+    const report = cleanupLingxiaoDisk({ apply: opts.apply === true, scope });
+    if (opts.json) {
+      console.log(JSON.stringify(report, null, 2));
+      process.exit(0);
+    }
+    const action = report.removed ? '已清理' : '可清理（dry-run，加 --apply 执行）';
+    const scopeLabel = scope === 'all' ? '全部 checkpoint 仓库' : 'tmp_pack 残留文件';
+    if (report.entries.length === 0) {
+      console.log(chalk.green('✓ 没有发现可清理项（' + scopeLabel + '）'));
+      process.exit(0);
+    }
+    console.log(chalk.bold('\n清理目标：' + scopeLabel));
+    for (const e of report.entries.slice(0, 30)) {
+      console.log('  • ' + formatBytes(e.bytes).padStart(10) + '  ' + e.path);
+    }
+    if (report.entries.length > 30) console.log(chalk.dim('  … 还有 ' + (report.entries.length - 30) + ' 项'));
+    console.log(chalk.cyan.bold('\n' + action + '：共 ' + report.entries.length + ' 项 / ' + formatBytes(report.totalBytes)));
+    if (!report.removed) console.log(chalk.dim('确认后运行：lingxiao clean --apply' + (scope === 'all' ? ' --all' : '')));
+    process.exit(0);
   });
 
 // ─── 诊断子命令 ──────────────────────────────────────────────────────────────

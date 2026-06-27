@@ -12,7 +12,13 @@ import { useArtifactStore, type ArtifactTarget } from '../../stores/artifactStor
 import { useTranslation } from 'react-i18next';
 import CommentPopup, { type CommentContext } from './CommentPopup';
 import { acpClient } from '../../api/AcpClient';
-import { MessageSquare } from 'lucide-react';
+import { MessageSquare, Wand2 } from 'lucide-react';
+import CanvasHtmlPreview from './CanvasHtmlPreview';
+import CanvasIntentPopup from './CanvasIntentPopup';
+import CanvasVersionStack from './CanvasVersionStack';
+import CanvasCommentList from './CanvasCommentList';
+import { useCanvasArtifactStore } from '../../stores/canvasArtifactStore';
+import { artifactIdFromPath } from '../../api/canvasApi';
 
 // Monaco 按需加载，避免影响初始 bundle 体积
 const MonacoEditor = lazy(() => import('@monaco-editor/react').then(m => ({ default: m.default })));
@@ -570,6 +576,71 @@ function DocxPreview({ html, onTextSelect }: { html: string; onTextSelect?: (tex
   );
 }
 
+function OfficePdfPreview({
+  renderUrl,
+  preview,
+  fallback,
+}: {
+  renderUrl: string;
+  preview: ArtifactPreview;
+  fallback: React.ReactNode;
+}) {
+  const { t } = useTranslation();
+  const [state, setState] = useState<'loading' | 'ready' | 'failed'>('loading');
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let objectUrl: string | null = null;
+    setState('loading');
+    setBlobUrl(null);
+
+    (async () => {
+      try {
+        const res = await fetch(renderUrl, { headers: apiHeaders() });
+        if (!res.ok) {
+          // 503 LibreOffice 不可用 / 422 转换失败 → 回退结构预览
+          if (!cancelled) setState('failed');
+          return;
+        }
+        const blob = await res.blob();
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        setBlobUrl(objectUrl);
+        setState('ready');
+      } catch {
+        if (!cancelled) setState('failed');
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [renderUrl]);
+
+  if (state === 'loading') {
+    return (
+      <div className="flex h-full items-center justify-center text-xs text-text-tertiary">
+        {t('artifact.office.rendering')}
+      </div>
+    );
+  }
+
+  if (state === 'failed' || !blobUrl) {
+    return <>{fallback}</>;
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="shrink-0 border-b border-border-muted bg-bg-secondary/70 px-3 py-1.5 text-[11px] text-text-tertiary">
+        {t('artifact.office.realLayout')}
+      </div>
+      <iframe src={blobUrl} className="min-h-0 flex-1 bg-bg-primary" title={preview.name} />
+    </div>
+  );
+}
+
 function PptxStructurePreview({ preview, content, onSlideComment }: { preview: ArtifactPreview; content: string; onSlideComment?: (slideIndex: number, slideTitle: string, slideText: string) => void }) {
   const { t } = useTranslation();
   const slides = preview.metadata?.slides ?? [];
@@ -726,7 +797,7 @@ function WsTreeNodes({ nodes, expanded, activePath, onToggleDir, onFileClick, de
 
 
 
-export default function ArtifactView() {
+export default function ArtifactView({ defaultCanvasMode = false, embedded = false }: { defaultCanvasMode?: boolean; embedded?: boolean } = {}) {
   const { t } = useTranslation();
   const sessionId = useSessionStore((s) => s.sessionId || s.activeSessionId);
   const activeArtifact = useArtifactStore((s) => s.activeArtifact);
@@ -757,12 +828,47 @@ export default function ArtifactView() {
   const [commentContext, setCommentContext] = useState<CommentContext | null>(null);
   const monacoEditorRef = useRef<Parameters<NonNullable<Parameters<typeof MonacoEditor>[0]['onMount']>>[0] | null>(null);
 
+  // ── 剑阁可交互 Canvas 模式 ──
+  const [canvasMode, setCanvasMode] = useState(defaultCanvasMode);
+  const canvas = useCanvasArtifactStore();
+  // 当前产物的规范化 artifactId（用于 Canvas 后端寻址）
+  const canvasArtifactId = useMemo(() => {
+    return preview?.path ? artifactIdFromPath(preview.path) : null;
+  }, [preview?.path]);
+  // 是否为 HTML 产物（剑阁选区拾取目前覆盖 HTML 成品）
+  const isHtmlArtifact = normalizeFormat(preview?.format) === 'html';
+
   const rawUrl = useMemo(() => {
     if (!preview?.path) return activeArtifact?.url || '';
     const params = new URLSearchParams({ path: preview.path, token: getServerToken() });
     if (sessionId) params.set('sessionId', sessionId);
     return `/api/v1/artifacts/raw?${params.toString()}`;
   }, [activeArtifact?.url, preview?.path, sessionId]);
+
+  // Office 真实版式渲染地址：PPTX/DOCX/XLSX → LibreOffice → PDF，复用 PDF iframe 渲染。
+  const renderUrl = useMemo(() => {
+    if (!preview?.path) return '';
+    const params = new URLSearchParams({ path: preview.path, token: getServerToken() });
+    if (sessionId) params.set('sessionId', sessionId);
+    return `/api/v1/artifacts/render?${params.toString()}`;
+  }, [preview?.path, sessionId]);
+
+  // 剑阁模式开启 + HTML 产物时，载入该产物的 Canvas 状态（sourcemap/版本栈/批注）。
+  const loadArtifactCanvas = canvas.loadArtifact;
+  useEffect(() => {
+    if (canvasMode && isHtmlArtifact && canvasArtifactId) {
+      void loadArtifactCanvas(canvasArtifactId);
+    } else {
+      void loadArtifactCanvas(null);
+    }
+  }, [canvasMode, isHtmlArtifact, canvasArtifactId, loadArtifactCanvas]);
+
+  // 非 HTML 产物自动退出剑阁模式（选区拾取目前只覆盖 HTML 成品）。
+  useEffect(() => {
+    if (canvasMode && preview && !isHtmlArtifact) {
+      setCanvasMode(false);
+    }
+  }, [canvasMode, preview, isHtmlArtifact]);
 
   const downloadPreview = useCallback(async () => {
     if (!preview || !rawUrl) return;
@@ -1052,6 +1158,17 @@ export default function ArtifactView() {
 
     // ── HTML：sandbox iframe 渲染，避免把完整页面当普通文本/消毒片段展示 ──
     if (format === 'html') {
+      // 剑阁模式：same-origin iframe + 选区拾取；常规模式：sandbox iframe 纯展示。
+      if (canvasMode) {
+        return (
+          <CanvasHtmlPreview
+            src={rawUrl}
+            title={preview.name}
+            activeNodeId={canvas.selection?.nodeId}
+            onPick={(sel) => canvas.setSelection(sel)}
+          />
+        );
+      }
       return (
         <iframe
           src={rawUrl}
@@ -1063,9 +1180,9 @@ export default function ArtifactView() {
       );
     }
 
-    // ── XLSX / XLS ──
+    // ── XLSX / XLS：LibreOffice → PDF 还原样式/公式/合并单元格/图表，失败回退交互表格 ──
     if (SPREADSHEET_FORMATS.has(format)) {
-      return (
+      const tableFallback = (
         <XlsxPreview
           preview={preview}
           content={content}
@@ -1077,11 +1194,14 @@ export default function ArtifactView() {
           } : undefined}
         />
       );
+      return renderUrl
+        ? <OfficePdfPreview renderUrl={renderUrl} preview={preview} fallback={tableFallback} />
+        : tableFallback;
     }
 
-    // ── DOCX：后端 mammoth 转 HTML 富文本渲染 ──
+    // ── DOCX：LibreOffice → PDF 真实版式渲染，失败回退 mammoth 富文本 ──
     if (format === 'docx' && preview.metadata?.renderer === 'html') {
-      return (
+      const docxFallback = (
         <DocxPreview
           html={content}
           onTextSelect={commentMode && preview.path ? (text) => {
@@ -1089,11 +1209,14 @@ export default function ArtifactView() {
           } : undefined}
         />
       );
+      return renderUrl
+        ? <OfficePdfPreview renderUrl={renderUrl} preview={preview} fallback={docxFallback} />
+        : docxFallback;
     }
 
-    // ── PPTX：后端 OOXML slide 结构渲染 ──
+    // ── PPTX：LibreOffice → PDF 真实版式渲染，失败回退 OOXML slide 结构 ──
     if (format === 'pptx') {
-      return (
+      const structureFallback = (
         <PptxStructurePreview
           preview={preview}
           content={content}
@@ -1102,6 +1225,9 @@ export default function ArtifactView() {
           } : undefined}
         />
       );
+      return renderUrl
+        ? <OfficePdfPreview renderUrl={renderUrl} preview={preview} fallback={structureFallback} />
+        : structureFallback;
     }
 
     // ── CSV（纯 CSV 格式）──
@@ -1197,7 +1323,9 @@ export default function ArtifactView() {
 
   return (
     <div className="flex h-full min-w-0 bg-bg-primary">
-      {/* 左侧：workspace 文件树 + 最近文件 */}
+      {/* 左侧：workspace 文件树 + 最近文件。embedded（在 JiangeCanvas 内）时隐藏——
+          JiangeCanvas 已持有唯一文件树，避免双树重复。 */}
+      {!embedded && (
       <aside className="artifact-recent-pane w-56 shrink-0 border-r border-border-muted bg-bg-secondary/50 flex flex-col min-h-0">
         <div className="px-3 py-2 border-b border-border-muted">
           <div className="text-xs font-mono font-semibold text-text-primary">{t('artifact.title')}</div>
@@ -1232,6 +1360,7 @@ export default function ArtifactView() {
           </div>
         )}
       </aside>
+      )}
 
       {/* 右侧：主内容区 */}
       <main className="flex-1 min-w-0 flex flex-col">
@@ -1314,6 +1443,22 @@ export default function ArtifactView() {
               </button>
             )}
 
+            {/* 剑阁可交互 Canvas 模式按钮（仅 HTML 成品） */}
+            {preview?.path && isHtmlArtifact && (
+              <button
+                onClick={() => setCanvasMode((v) => !v)}
+                className={`inline-flex items-center gap-1 rounded border px-2 py-1 text-xs transition-colors ${
+                  canvasMode
+                    ? 'border-accent-brand bg-accent-brand/10 text-accent-brand'
+                    : 'border-border-muted text-text-secondary hover:text-text-primary hover:border-accent-brand/40'
+                }`}
+                title={t('canvas.mode.button', '剑阁：选区改写 + 版本栈')}
+              >
+                <Wand2 size={13} />
+                {t('canvas.mode.buttonText', '剑阁')}
+              </button>
+            )}
+
             {/* 评论按钮 */}
             {preview?.path && (
               <button
@@ -1350,7 +1495,77 @@ export default function ArtifactView() {
               {t('artifact.comment.modeHint', '评论模式已开启 — 选中内容后点击评论')}
             </div>
           )}
-          <div className={`min-h-0 flex-1 ${commentMode ? 'ring-1 ring-inset ring-accent-brand/20' : ''}`}>{renderContent()}</div>
+          {/* 剑阁模式提示条 */}
+          {canvasMode && !canvas.selection && (
+            <div className="shrink-0 border-b border-accent-brand/30 bg-accent-brand/10 px-3 py-1.5 text-[11px] text-accent-brand flex items-center gap-2">
+              <Wand2 size={12} />
+              {canvas.sourceMap
+                ? t('canvas.modeHint', '剑阁模式已开启 — 点击成品上的元素，写下诉求让凌霄改源码')
+                : t('canvas.modeHintNoMap', '剑阁模式已开启 — 该产物尚未建立源码映射，无法拾取选区')}
+            </div>
+          )}
+          {/* SSE 热更新提示 */}
+          {canvasMode && canvas.updateNotice && (
+            <div className="shrink-0 flex items-center justify-between gap-2 border-b border-accent-green/30 bg-accent-green/10 px-3 py-1.5 text-[11px] text-accent-green">
+              <span className="flex items-center gap-1.5 min-w-0">
+                <RefreshCw size={12} className="shrink-0" />
+                <span className="truncate">
+                  {t('canvas.updateNotice', '凌霄已更新，已生成 v{{n}}', { n: canvas.updateNotice.version })}
+                </span>
+              </span>
+              <button
+                onClick={() => canvas.consumeUpdateNotice()}
+                className="shrink-0 rounded p-0.5 hover:bg-accent-green/20"
+                title={t('app.close', '关闭')}
+              >
+                <XCircle size={12} />
+              </button>
+            </div>
+          )}
+          {/* 剑阁模式：预览 + 右侧版本栈/批注栏；常规模式：纯预览 */}
+          {canvasMode ? (
+            <div className="min-h-0 flex-1 flex">
+              <div className="relative min-h-0 flex-1 ring-1 ring-inset ring-accent-brand/20">
+                {renderContent()}
+                {/* 改写框 */}
+                <CanvasIntentPopup
+                  selection={canvas.selection}
+                  status={canvas.intentStatus}
+                  error={canvas.intentError}
+                  onSubmit={(text) => canvas.submitSelectionIntent(text)}
+                  onClose={() => { canvas.setSelection(null); canvas.resetIntentStatus(); }}
+                />
+              </div>
+              {/* 右侧栏：版本栈 + 批注 */}
+              <aside className="w-60 shrink-0 border-l border-border-muted bg-bg-secondary/40 overflow-y-auto p-3 flex flex-col gap-4">
+                <CanvasVersionStack
+                  versions={canvas.versions}
+                  activeVersion={canvas.activeVersion}
+                  onActivate={(v) => canvas.activateVersion(v)}
+                  updateNotice={canvas.updateNotice}
+                  onDismissNotice={() => canvas.consumeUpdateNotice()}
+                />
+                <CanvasCommentList
+                  comments={canvas.comments}
+                  onLocate={(nodeId) => {
+                    if (!nodeId) return;
+                    const node = canvas.sourceMap?.nodes.find((n) => n.nodeId === nodeId);
+                    if (node) {
+                      canvas.setSelection({ nodeId, anchor: node });
+                    }
+                  }}
+                  onSetStatus={(id, status) => canvas.setCommentStatus(id, status)}
+                />
+                {canvas.error && (
+                  <div className="rounded border border-accent-red/30 bg-accent-red/5 px-2 py-1.5 text-[10px] text-accent-red">
+                    {canvas.error}
+                  </div>
+                )}
+              </aside>
+            </div>
+          ) : (
+            <div className={`min-h-0 flex-1 ${commentMode ? 'ring-1 ring-inset ring-accent-brand/20' : ''}`}>{renderContent()}</div>
+          )}
           {/* 评论浮窗 */}
           <CommentPopup
             context={commentContext}

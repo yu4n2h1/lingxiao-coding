@@ -1863,7 +1863,7 @@ export class LeaderToolsExecutor {
     });
     if (mode === 'office') {
       return enabled
-        ? 'Office 模式已开启 — 办公审美协议已注入，PPTX/DOCX/XLSX/PDF 改用 shell 跑 Node 脚本直调库（pptxgenjs/docx/exceljs/pdfkit）自由生成。再次调用 set_mode(mode="office", enabled=false) 关闭。'
+        ? 'Office 模式已开启 — 办公审美协议已注入。⚠ 动手前先做意图澄清：若用户需求模糊（如"做个PPT"未说清产物类型/场景/受众/风格/内容来源），必须先 ask_user 一次性澄清这些维度，再选风格、写脚本，禁止拿模糊输入直接埋头生成。PPTX/DOCX/XLSX/PDF 用 shell 跑 Node 脚本直调库（pptxgenjs/docx/exceljs/pdfkit）生成。再次调用 set_mode(mode="office", enabled=false) 关闭。'
         : 'Office 模式已关闭 — 回到纯 Coding 模式，办公协议已从上下文卸载。';
     }
     return enabled

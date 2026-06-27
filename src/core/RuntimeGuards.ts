@@ -1,6 +1,7 @@
 import { cleanupRegistry } from './CleanupRegistry.js';
 import { writeCrashReport, listCrashReports } from './CrashReporter.js';
 import { getLogDir } from './Log.js';
+import { restoreTerminalState } from './terminalRestore.js';
 
 // 本进程启动时刻（ms）。用于退出时识别「本次运行新产生」的崩溃报告，
 // 避免把历史 crash 文件误报给用户。留 1s 容差应对时钟/写盘抖动。
@@ -166,6 +167,13 @@ export function installProcessRuntimeGuards(): void {
   installed = true;
 
   installCrashExitNotice();
+
+  // 终端状态还原兜底：所有退出路径（正常/crash/信号/强退）最终都会触发 'exit' 事件。
+  // 在此统一关闭 mouse tracking / bracketed paste 并恢复光标，杜绝异常退出后宿主终端
+  // 残留 raw 模式导致鼠标动作打出 SGR 上报序列（^[[<65;70;25M）。幂等 + best-effort。
+  process.on('exit', () => {
+    restoreTerminalState();
+  });
 
   process.on('unhandledRejection', (reason) => {
     console.error('[RuntimeGuard] Unhandled promise rejection:', reason);

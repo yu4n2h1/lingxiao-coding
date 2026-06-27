@@ -267,9 +267,12 @@ export function registerSettingsRoutes(
     data.localLlmGatewayPort = typeof data.localLlmGatewayPort === 'number' && data.localLlmGatewayPort > 0 ? data.localLlmGatewayPort : 62000;
     data.localLlmGatewayInjectEnv = data.localLlmGatewayInjectEnv !== false;
     data.localLlmGatewayOverrideExistingEnv = !!data.localLlmGatewayOverrideExistingEnv;
-    data.fileCheckpointingEnabled = data.fileCheckpointingEnabled !== false;
+    // 默认关闭：与 config schema (CheckpointGroupSchema) 的 default(false) 对齐。
+    // 历史 bug：此处曾用 `!== false`，导致 config 未显式设置时 GET 返回 true，
+    // 前端再把 true 存回 settings.json，使 shadow git 快照被永久打开并撑爆磁盘。
+    data.fileCheckpointingEnabled = data.fileCheckpointingEnabled === true;
     data.checkpointMaxCheckpoints = typeof data.checkpointMaxCheckpoints === 'number' && data.checkpointMaxCheckpoints >= 5 ? data.checkpointMaxCheckpoints : 50;
-    data.checkpointAutoGcEnabled = data.checkpointAutoGcEnabled !== false;
+    data.checkpointAutoGcEnabled = data.checkpointAutoGcEnabled === true;
     data.checkpointMaxWorkspaceFiles = typeof data.checkpointMaxWorkspaceFiles === 'number' && data.checkpointMaxWorkspaceFiles >= 1000 ? data.checkpointMaxWorkspaceFiles : 100000;
     data.autoCompactEnabled = data.autoCompactEnabled !== false;
     data.memoryEnabled = data.memoryEnabled !== false;

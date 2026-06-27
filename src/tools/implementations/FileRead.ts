@@ -1,10 +1,12 @@
 import { z } from 'zod';
 import { Tool, type ToolContext, type ToolResult } from '../Tool.js';
 import { createReadStream } from 'fs';
-import { access, stat as statFile } from 'fs/promises';
+import { access, readFile, stat as statFile } from 'fs/promises';
 import { readBinaryProbeAsync, resolveWorkspacePath } from './utils.js';
 import { basename, extname } from 'path';
 import { tempDownloadRegistry } from '../../core/TempDownloadRegistry.js';
+import { supportsVisionFromProvider } from '../../llm/model_capabilities.js';
+import { ocrImage } from '../../llm/local_vision_fallback.js';
 import { createInterface } from 'readline';
 
 const FileReadSchema = z.object({
@@ -84,6 +86,11 @@ const PREVIEWABLE_BINARY_EXTENSIONS: Record<string, string> = {
   '.mp3': 'audio/mpeg',
   '.wav': 'audio/wav',
 };
+
+// vision 模型可直接读取的位图格式（svg 是文本矢量、pdf/视频/音频不走图像协议）。
+const VISION_IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp']);
+// 内联 base64 的图片大小上限：超过则回退下载链接，避免撑爆上下文 / 触发 provider 图片大小限制。
+const MAX_IMAGE_INLINE_BYTES = 8 * 1024 * 1024;
 
 // Code file extensions that should be wrapped in code blocks
 const CODE_EXTENSIONS = new Set([
@@ -173,12 +180,55 @@ export class FileReadTool extends Tool {
         const ext = extname(p).toLowerCase();
         const mimeType = PREVIEWABLE_BINARY_EXTENSIONS[ext];
         if (mimeType) {
+          // 始终生成下载/预览卡片（前端 Artifact 面板预览用）
           const artifact = tempDownloadRegistry.create({
             path: p,
             name: basename(p),
             mimeType,
             sessionId: context?.sessionId,
           });
+
+          // 图片格式：按当前模型能力把图像内容真正交付给 LLM，而非只给一个下载链接。
+          //  - vision 模型 → image_url content part（走多模态协议，下游 externalize 成 blob 引用）
+          //  - 非 vision 模型 → 本地 OCR 兜底
+          // 仍附下载链接，前端可预览。与 ScreenshotTool 同源逻辑。
+          if (VISION_IMAGE_EXTENSIONS.has(ext) && stat.size <= MAX_IMAGE_INLINE_BYTES) {
+            const base64 = (await readFile(p)).toString('base64');
+            const dataUri = `data:${mimeType};base64,${base64}`;
+            const model = typeof context?.model === 'string' ? context.model : '';
+            const visionCapable = model ? supportsVisionFromProvider(model) : false;
+            const header = [
+              `🖼 图片文件: ${p}`,
+              `大小: ${(stat.size / 1024).toFixed(1)}KB · ${mimeType}`,
+              `预览链接: ${artifact.url}`,
+            ].join('\n');
+
+            if (visionCapable) {
+              return {
+                success: true,
+                data: [
+                  { type: 'text', text: header },
+                  { type: 'image_url', image_url: { url: dataUri, detail: 'auto' } },
+                ],
+              };
+            }
+
+            const ocrText = await ocrImage(dataUri, 1);
+            const ocrSection = ocrText && ocrText.trim()
+              ? ocrText
+              : `[OCR 未提取到文字。当前模型 ${model || 'unknown'} 不支持 vision，图片已保存至 ${p}。]`;
+            return {
+              success: true,
+              data: [
+                header,
+                '[System: 当前模型不支持图片输入，已用本地 OCR 替代图像内容。]',
+                '',
+                ocrSection,
+              ].join('\n'),
+            };
+          }
+
+          // 非图片可预览二进制（pdf/视频/音频/svg），或图片过大：返回下载/预览卡片。
           return {
             success: true,
             data: {

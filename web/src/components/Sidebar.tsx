@@ -36,7 +36,6 @@ const topNav: NavItem[] = [
 // 核心工作区：高频稳定入口，默认常驻可见
 const workspaceNav: NavItem[] = [
   { view: 'tasks', icon: <ListTodo size={16} />, labelKey: 'sidebar.tasks' },
-  { view: 'changes', icon: <FileEdit size={16} />, labelKey: 'sidebar.changes' },
   { view: 'git', icon: <GitBranch size={16} />, labelKey: 'sidebar.git' },
   { view: 'editor', icon: <FileCode size={16} />, labelKey: 'sidebar.editor' },
   { view: 'artifact', icon: <GalleryVerticalEnd size={16} />, labelKey: 'sidebar.artifacts' },
@@ -45,6 +44,7 @@ const workspaceNav: NavItem[] = [
 
 // 更多工具：次要/进阶/实验性入口，默认折叠，减少首屏认知负担
 const moreToolsNav: NavItem[] = [
+  { view: 'changes', icon: <FileEdit size={16} />, labelKey: 'sidebar.changes' },
   { view: 'blueprint', icon: <LayoutGrid size={16} />, labelKey: 'sidebar.blueprint' },
   { view: 'blackboard', icon: <Network size={16} />, labelKey: 'sidebar.blackboard' },
   { view: 'agent-activity', icon: <Activity size={16} />, labelKey: 'sidebar.agentActivity' },

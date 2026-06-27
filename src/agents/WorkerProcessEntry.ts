@@ -147,7 +147,7 @@ const heartbeatInterval = setInterval(() => {
   sendMessage({
     type: 'heartbeat',
     timestamp: Date.now(),
-    payload: { phase: currentPhase },
+    payload: { phase: currentPhase, rss: process.memoryUsage().rss },
   });
 }, 30000);
 

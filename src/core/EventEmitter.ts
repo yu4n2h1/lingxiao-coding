@@ -813,6 +813,14 @@ export interface EventMap {
     /** Error message on failure */
     error?: string;
   };
+  'canvas:version_pushed': {
+    sessionId: string;
+    artifactId: string;
+    version: number;
+    activeVersion: number;
+    intent?: string;
+    timestamp: number;
+  };
 }
 
 export type EventName = keyof EventMap;

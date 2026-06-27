@@ -712,11 +712,15 @@ const MemoryGroupSchema = z.object({
 });
 
 const CheckpointGroupSchema = z.object({
-  file_checkpointing_enabled: z.boolean().default(true),
+  /** 默认关闭：shadow git 快照在大工作区会反复全量入库并触发 gc，撑爆磁盘
+   *  （历史 bug：~/.lingxiao/checkpoints 下堆积 10GB+ 的 tmp_pack）。
+   *  需要 /rewind 代码回退能力的用户可手动开启。 */
+  file_checkpointing_enabled: z.boolean().default(false),
   /** 每个项目 shadow git 仓库保留的最大 commit 数量，超出时自动裁剪旧快照 */
   max_checkpoints: z.number().int().min(5).default(50),
-  /** 是否自动对 shadow git 仓库执行 gc --prune=now 回收磁盘空间 */
-  auto_gc_enabled: z.boolean().default(true),
+  /** 默认关闭：自动 gc 即使不带 --aggressive 也可能在大库产生巨大临时 pack。
+   *  开启时走温和的 git gc --auto，并在 gc 前清理遗留 tmp_pack。 */
+  auto_gc_enabled: z.boolean().default(false),
   /** 工作目录文件数安全上限，超过此值时拒绝做快照（防止对系统目录/主目录爆炸） */
   max_workspace_files: z.number().int().min(1000).default(100_000),
 });
